@@ -151,6 +151,7 @@ def main(output_folder, log, basepath):
                              }
 
                     torch.save(state, output_model_name)
+                    print(f"Model saved successfully to: {output_model_name}")
                 else:
                     print('')
                 model.train()

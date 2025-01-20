@@ -89,8 +89,6 @@ class DatasetCataract101(DatasetNoLabel):
             
         max_frame = self.label_shapes[patientID]
         if frame >= max_frame:
-            print(f"Frame number {frame} out of bounds for patient {patientID}")
-            print(f"Max frame number is {max_frame-1}")
             print(f"File: {self.img_files[index]}")
             frame = max_frame - 1  # Use last frame instead of failing
             

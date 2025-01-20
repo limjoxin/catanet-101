@@ -201,9 +201,32 @@ def main(output_folder, log, pretrained_model):
                         X = X.float().to(device)
 
                         with torch.set_grad_enabled(phase == 'train'):
+                            # Core issue fixes in the training loop section:
                             stateful = (i > 0)
                             step_prediction, experience_prediction, rsd_prediction = model.forwardRNN(X, stateful=stateful,
                                                                                       skip_features=skip_features)
+                            
+                            # Debug size mismatches
+                            print(f"\nDebug sizes:")
+                            print(f"step_prediction shape: {step_prediction.shape}")
+                            print(f"y shape: {y.shape}")
+                            if step_prediction.size(0) != y.size(0):
+                                print(f"WARNING: Size mismatch detected!")
+                                print(f"step_prediction batch size: {step_prediction.size(0)}")
+                                print(f"y batch size: {y.size(0)}")
+                                print(f"Input X shape: {X.shape}")  # Fixed variable name from x to X
+                                
+                                # Handle size mismatch by truncating the longer sequence
+                                min_size = min(step_prediction.size(0), y.size(0))
+                                # Truncate all predictions
+                                step_prediction = step_prediction[:min_size]
+                                experience_prediction = experience_prediction[:min_size]
+                                rsd_prediction = rsd_prediction[:min_size]
+                                # Truncate all targets
+                                y = y[:min_size]
+                                y_experience = y_experience[:min_size]
+                                y_rsd = y_rsd[:min_size]
+
                             loss_step = step_criterion(step_prediction, y)
                             loss_experience = experience_criterion(experience_prediction, y_experience)
                             rsd_prediction = rsd_prediction.squeeze(1)
