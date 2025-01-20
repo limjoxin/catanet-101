@@ -50,8 +50,10 @@ class DatasetNoLabel(torch.utils.data.Dataset):
         return self.nitems
 
     def _name2id(self, filename):
-        *patientID, frame = os.path.splitext(os.path.basename(filename))[0].split('_')
-        patientID = '_'.join(patientID)
+        basename = os.path.splitext(os.path.basename(filename))[0]
+        parts = basename.split('_')
+        patientID = parts[-2]
+        frame = parts[-1]
         return patientID, int(frame) - 1
 
 
@@ -63,14 +65,35 @@ class DatasetCataract101(DatasetNoLabel):
         super().__init__(datafolders, img_transform, max_len, fps)
         assert len(label_files) == len(datafolders), 'not the same number of data and label files'
         self.label_files = {}
+        
+        # Add shape tracking
+        self.label_shapes = {}
         for f in label_files:
             patientID = os.path.splitext(os.path.basename(f))[0]
-            self.label_files[patientID] = np.genfromtxt(f, delimiter=',', skip_header=1)[:, 1:]
-
+            labels = np.genfromtxt(f, delimiter=',', skip_header=1)[:, 1:]
+            self.label_files[patientID] = labels
+            self.label_shapes[patientID] = labels.shape[0]
+            
     def __getitem__(self, index):
         img, elapsed_time, frame_number, rsd = super().__getitem__(index)
-
-        # load label
-        patientID, frame_number = self._name2id(self.img_files[index])
-        label = self.label_files[patientID][frame_number]
+        
+        # Get patient ID and frame
+        basename = os.path.splitext(os.path.basename(self.img_files[index]))[0]
+        parts = basename.split('_')
+        patientID = parts[-2]  # Get the number only
+        frame = int(parts[-1])
+        
+        # Check bounds before accessing
+        if patientID not in self.label_files:
+            raise KeyError(f"PatientID {patientID} not found in label files")
+            
+        max_frame = self.label_shapes[patientID]
+        if frame >= max_frame:
+            print(f"Frame number {frame} out of bounds for patient {patientID}")
+            print(f"Max frame number is {max_frame-1}")
+            print(f"File: {self.img_files[index]}")
+            frame = max_frame - 1  # Use last frame instead of failing
+            
+        # Now access the label
+        label = self.label_files[patientID][frame]
         return img, label
