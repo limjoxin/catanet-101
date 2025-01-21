@@ -50,7 +50,6 @@ def align_features_and_labels(features, labels, sequence_name):
     """
     if len(features) != len(labels):
         min_length = min(len(features), len(labels))
-        print(f"Truncating both to length: {min_length}")
         
         if abs(len(features) - len(labels)) > 5:
             print(f"WARNING: Large length difference detected in {sequence_name}")
