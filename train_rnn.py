@@ -162,7 +162,7 @@ def main(output_folder, log, pretrained_model):
     for step_count, training_step in enumerate(training_steps):
         print(training_step)
         if step_count > 0:
-            checkpoint = torch.load(output_model_name, map_location=device)
+            checkpoint = torch.load(output_model_name, map_location=device, weights_only=True)
             model.load_state_dict(checkpoint['model_dict'])
         best_loss_on_val = np.Infinity
         stop_epoch = config['train']['epochs'][step_count]
