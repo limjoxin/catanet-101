@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from typing import TypeVar
-from torchvision.models import densenet169
+from torchvision.models import densenet169, DenseNet169_Weights
 import numpy as np
 
 T = TypeVar('T', bound='Module')
@@ -100,7 +100,7 @@ class CatRSDNet(nn.Module):
             param.requires_grad = not freeze
 
     def initCNN(self, feature_size, n_classes_1, n_classes_2):
-        cnn = densenet169(pretrained=True)
+        cnn = densenet169(weights=DenseNet169_Weights.IMAGENET1K_V1)
         tmp_conv_weights = cnn.features.conv0.weight.data.clone()
         cnn.features.conv0 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
         # copy RGB weights pre-trained on ImageNet
