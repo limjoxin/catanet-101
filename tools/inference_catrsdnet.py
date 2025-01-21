@@ -7,7 +7,6 @@ from torchvision.transforms import Compose, ToTensor, ToPILImage, Resize
 import sys
 sys.path.append('../')
 from models.catRSDNet import CatRSDNet
-from models.catRSDNet_NL import CatRSDNet_NL
 import glob
 from utils.dataset_utils import DatasetNoLabel
 
