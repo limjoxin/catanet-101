@@ -131,6 +131,86 @@ def main_cataract101(input_path, output_path, fps=2.5):
             extract_frames_from_video(vid, output_path, dim=256, fps=fps, start=start, end=end)
 
 
+def main_cataract1k(input_path, output_path, fps=2.5):
+    """
+    Process videos and annotations from the Cataract-1K Phase Recognition dataset.
+    This function handles the specific two-file annotation format where each video
+    has an annotations CSV and a metadata CSV.
+    """
+    print('Processing Cataract-1K dataset, saving to %s ... ' % output_path)
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+
+    # Find all videos in the input directory
+    videos = sorted(glob.glob(os.path.join(input_path, '*.mp4')))
+    assert len(videos) > 0, f'No mp4 videos found in {input_path}'
+
+    for i, vid in enumerate(videos):
+        print(f'Processing {vid}: {i+1} of {len(videos)}')
+        
+        # Get the case ID from the video filename
+        vname = os.path.splitext(os.path.basename(vid))[0]
+        case_id = vname.split('_')[1]  # Extracts number from case_XXXX_video.mp4
+        
+        # Look for corresponding annotation files
+        phase_csv = os.path.join(input_path, f"case_{case_id}_annotations_phases.csv")
+        metadata_csv = os.path.join(input_path, f"case_{case_id}_video.csv")
+        
+        if not (os.path.exists(phase_csv) and os.path.exists(metadata_csv)):
+            print(f"Warning: Missing annotation files for {vname}, skipping...")
+            continue
+
+        # Read metadata for FPS information
+        metadata = pd.read_csv(metadata_csv)
+        orig_fps = metadata['fps'].iloc[0]
+        
+        # Read phase annotations
+        phases = pd.read_csv(phase_csv)
+        
+        # Calculate start and end frames
+        start_frame = phases['frame'].min()
+        end_frame = phases['endFrame'].max()
+        
+        # Convert to timestamps
+        start = frame2minsec(start_frame, orig_fps)
+        end = frame2minsec(end_frame, orig_fps)
+        
+        # Calculate sampling rate
+        sample_factor = np.floor(orig_fps/fps)
+        if sample_factor != (orig_fps/fps):
+            adjusted_fps = orig_fps/sample_factor
+            warnings.warn(f'Original fps cannot be divided by target fps, using {adjusted_fps:.2f} instead')
+            fps = adjusted_fps
+
+        # Create output directory and process frames
+        if not os.path.isdir(os.path.join(output_path, vname)):
+            os.makedirs(os.path.join(output_path, vname))
+            
+            # Process phase annotations
+            processed_phases = []
+            for _, row in phases.iterrows():
+                # Calculate frame numbers at new sampling rate
+                start_idx = int((row['frame'] - start_frame) / sample_factor)
+                end_idx = int((row['endFrame'] - start_frame) / sample_factor)
+                
+                # Add phase information for each sampled frame
+                for frame in range(start_idx, end_idx + 1):
+                    processed_phases.append({
+                        'frame': frame,
+                        'phase': row['comment'],
+                        'time': row['sec']
+                    })
+            
+            # Save processed annotations
+            phases_df = pd.DataFrame(processed_phases)
+            phases_df.to_csv(os.path.join(output_path, vname, f"{vname}_processed_phases.csv"), 
+                        index=False)
+            
+            # Extract frames
+            extract_frames_from_video(vid, output_path, dim=256, fps=fps, 
+                                start=start, end=end)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -147,13 +227,15 @@ if __name__ == '__main__':
     parser.add_argument(
         '--label',
         type=str,
-        choices=['cataract101', 'CATARACTs', 'startend'],
+        choices=['cataract101', 'CATARACTs', 'startend', 'cataract1k'],  # Added cataract1k
         default='cataract101',
-        help='type of label, if startend provide a csv file with fields {PatientID,Start,End}. '
-             'Start/End in format XX:XX.'
+        help='type of label dataset'
     )
     args = parser.parse_args()
-    if args.label == 'cataract101':
+    
+    if args.label == 'cataract1k':
+        main_cataract1k(args.input, args.output)
+    elif args.label == 'cataract101':
         main_cataract101(args.input, args.output)
     elif args.label == 'CATARACTs':
         main_cataracts_train(args.input, args.output)
