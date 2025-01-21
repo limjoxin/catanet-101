@@ -18,7 +18,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 plt.rcParams['font.size'] = 16
-cmap = plt.cm.get_cmap('tab20')  # 11 discrete colors
+cmap = plt.colormaps['tab20']  # 11 discrete colors
 
 csv_files = glob.glob(os.path.join(args.input, '*.csv'))
 
@@ -66,7 +66,7 @@ for file in csv_files:
     # perform temperature scaling of experience predictions
     experience_cal = softmax(np.column_stack([df['predicted_senior'], df['predicted_assistant']])/TEMPERATURE, axis=-1)[:, 0]
     height = np.max(df['elapsed'])/15
-    ax2.imshow(df['predicted_step'][None, :].astype(int), cmap=cmap,
+    ax2.imshow(np.array(df['predicted_step']).reshape(1, -1).astype(int), cmap=cmap,
                      extent=[0.0, np.max(df['elapsed']), -height, height], interpolation='none', vmin=0, vmax=11)
     ax3.imshow(experience_cal[None, :],cmap='cividis',
                      extent=[0.0, np.max(df['elapsed']), -height, height], interpolation='none', vmin=0, vmax=1)
