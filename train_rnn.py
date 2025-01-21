@@ -36,6 +36,59 @@ def conf2metrics(conf_mat):
     accuracy = np.trace(conf_mat) / np.sum(conf_mat)
     return precision, recall, f1, accuracy
 
+def align_features_and_labels(features, labels, sequence_name):
+    """
+    Align features and labels to ensure they have matching lengths.
+    
+    Args:
+        features: Tensor of shape (N, ...)
+        labels: Tensor of shape (M, ...)
+        sequence_name: String identifier for logging purposes
+    
+    Returns:
+        Tuple of aligned (features, labels)
+    """
+    if len(features) != len(labels):
+        min_length = min(len(features), len(labels))
+        print(f"Warning: Length mismatch in sequence {sequence_name}")
+        print(f"Features length: {len(features)}, Labels length: {len(labels)}")
+        print(f"Truncating both to length: {min_length}")
+        
+        if abs(len(features) - len(labels)) > 5:  # Arbitrary threshold
+            print(f"WARNING: Large length difference detected in {sequence_name}")
+            
+        features = features[:min_length]
+        labels = labels[:min_length]
+    assert len(features) == len(labels), f"Alignment failed for {sequence_name}"
+    
+    return features, labels
+
+def validate_batch_dimensions(predictions, targets, sequence_name):
+    """
+    Comprehensive validation of tensor dimensions before loss calculation.
+    
+    Args:
+        predictions: Model output tensor
+        targets: Ground truth tensor
+        sequence_name: String identifier for logging
+    """
+    if predictions.size(0) != targets.size(0):
+        raise ValueError(
+            f"Batch size mismatch in {sequence_name}:\n"
+            f"Predictions shape: {predictions.shape}\n"
+            f"Targets shape: {targets.shape}\n"
+            f"This indicates a problem in the data pipeline."
+        )
+        
+def log_sequence_statistics(input_path, features, labels):
+    """Log detailed statistics about sequence processing."""
+    print(f"\nProcessing sequence: {os.path.basename(input_path)}")
+    print(f"Features statistics:")
+    print(f"  Shape: {features.shape}")
+    print(f"  Range: [{features.min():.3f}, {features.max():.3f}]")
+    print(f"Labels statistics:")
+    print(f"  Shape: {labels.shape}")
+    print(f"  Unique values: {torch.unique(labels).tolist()}")
 
 def main(output_folder, log, pretrained_model):
     config = {'train': {}, 'val': {}, 'data': {}}
@@ -182,9 +235,19 @@ def main(output_folder, log, pretrained_model):
 
                 for ii, (label_path, input_path) in enumerate(sequences):
                     if (training_step == 'train_rnn') | (training_step == 'train_fc'):
+                        # Load labels
                         label = torch.tensor(np.genfromtxt(label_path, delimiter=',', skip_header=1)[:, 1:])
-                        dataloader = [(torch.tensor(features[input_path]).unsqueeze(0),
-                                      label[:len(features[input_path]),:])]
+                        features_tensor = torch.tensor(features[input_path])
+                        
+                        # Align features and labels
+                        features_tensor, label = align_features_and_labels(
+                            features_tensor, 
+                            label,
+                            os.path.basename(input_path)
+                        )
+                        
+                        # Create dataloader with aligned data
+                        dataloader = [(features_tensor.unsqueeze(0), label)]
                         skip_features = True
                     else:
                         batch_size = config['train']['window']
@@ -204,6 +267,11 @@ def main(output_folder, log, pretrained_model):
                             stateful = (i > 0)
                             step_prediction, experience_prediction, rsd_prediction = model.forwardRNN(X, stateful=stateful,
                                                                                       skip_features=skip_features)
+                            validate_batch_dimensions(
+                                step_prediction,
+                                y,
+                                f"{os.path.basename(input_path)} - batch {i}"
+                            )
                             loss_step = step_criterion(step_prediction, y)
                             loss_experience = experience_criterion(experience_prediction, y_experience)
                             rsd_prediction = rsd_prediction.squeeze(1)
