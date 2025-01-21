@@ -50,11 +50,9 @@ def align_features_and_labels(features, labels, sequence_name):
     """
     if len(features) != len(labels):
         min_length = min(len(features), len(labels))
-        print(f"Warning: Length mismatch in sequence {sequence_name}")
-        print(f"Features length: {len(features)}, Labels length: {len(labels)}")
         print(f"Truncating both to length: {min_length}")
         
-        if abs(len(features) - len(labels)) > 5:  # Arbitrary threshold
+        if abs(len(features) - len(labels)) > 5:
             print(f"WARNING: Large length difference detected in {sequence_name}")
             
         features = features[:min_length]
@@ -79,16 +77,6 @@ def validate_batch_dimensions(predictions, targets, sequence_name):
             f"Targets shape: {targets.shape}\n"
             f"This indicates a problem in the data pipeline."
         )
-        
-def log_sequence_statistics(input_path, features, labels):
-    """Log detailed statistics about sequence processing."""
-    print(f"\nProcessing sequence: {os.path.basename(input_path)}")
-    print(f"Features statistics:")
-    print(f"  Shape: {features.shape}")
-    print(f"  Range: [{features.min():.3f}, {features.max():.3f}]")
-    print(f"Labels statistics:")
-    print(f"  Shape: {labels.shape}")
-    print(f"  Unique values: {torch.unique(labels).tolist()}")
 
 def main(output_folder, log, pretrained_model):
     config = {'train': {}, 'val': {}, 'data': {}}
