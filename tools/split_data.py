@@ -44,7 +44,7 @@ if __name__ == '__main__':
 
     for phase in ids_phase:
         for id in ids_phase[phase]:
-            filepath = os.path.join(args.input, f'case_{id}/')
+            filepath = os.path.join(args.input, f'{id}/')
             assert filepath in videos, f'video file {id} not found in {args.input}'
             shutil.move(filepath, os.path.join(args.out, phase, f'{id}'))
 
