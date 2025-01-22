@@ -26,9 +26,7 @@ if __name__ == '__main__':
         help='Split train and validation for 6-fold cross validation. Select which fold to split for.'
     )
     args = parser.parse_args()
-    
-    # Look for case folders inside phase_recognition directory
-    videos = glob.glob(os.path.join(args.input, 'phase_recognition/case_*'))
+    videos = glob.glob(os.path.join(args.input, '*/'))
 
     if not os.path.isdir(args.out):
         [os.makedirs(os.path.join(args.out, phase)) for phase in ['train', 'val', 'test']]
@@ -46,14 +44,9 @@ if __name__ == '__main__':
 
     for phase in ids_phase:
         for id in ids_phase[phase]:
-            # Look for the case folder in the phase_recognition directory
-            filepath = os.path.join(args.input, 'phase_recognition', f'case_{id}')
-            
-            if not os.path.exists(filepath):
-                assert False, f'folder case_{id} not found in {os.path.join(args.input, "phase_recognition")}'
-            
-            destination = os.path.join(args.out, phase, f'case_{id}')
-            print(f"  Moving to: {destination}")
-            shutil.move(filepath, destination)
+            filepath = os.path.join(args.input, f'case_{id}/')
+            assert filepath in videos, f'folder {id} not found in {args.input}'
+            shutil.move(filepath, os.path.join(args.out, phase, f'{id}'))
+
 
 
