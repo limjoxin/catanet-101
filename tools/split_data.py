@@ -47,13 +47,12 @@ if __name__ == '__main__':
     for phase in ids_phase:
         for id in ids_phase[phase]:
             # Look for the case folder in the phase_recognition directory
-            filepath = os.path.join(args.input, 'phase_recognition', f'case_{id}')
+            filepath = os.path.join(args.input, 'phase_recognition', f'{id}')
             
             if not os.path.exists(filepath):
                 assert False, f'folder case_{id} not found in {os.path.join(args.input, "phase_recognition")}'
             
             destination = os.path.join(args.out, phase, f'case_{id}')
-            print(f"  Moving to: {destination}")
             shutil.move(filepath, destination)
 
 
