@@ -28,8 +28,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     videos = glob.glob(os.path.join(args.input, '*/'))
 
-    print(f"videos: {videos}")
-
     if not os.path.isdir(args.out):
         [os.makedirs(os.path.join(args.out, phase)) for phase in ['train', 'val', 'test']]
 
@@ -44,15 +42,8 @@ if __name__ == '__main__':
     ids_phase['val'] = dataconfig['train'][f'fold{args.fold}']
     ids_phase['test'] = dataconfig['test']
 
-    print(ids_phase['train'])
-    print(ids_phase['val'])
-    print(ids_phase['test'])
-
     for phase in ids_phase:
-        print("phase: ", phase)
         for id in ids_phase[phase]:
-            print("id: ", id)
             filepath = os.path.join(args.input, f'case_{id}/')
-            print("filepath: ", filepath)
             assert filepath in videos, f'folder {id} not found in {args.input}'
             shutil.move(filepath, os.path.join(args.out, phase, f'{id}'))
