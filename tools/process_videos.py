@@ -148,11 +148,9 @@ def main_cataract1k(input_path, output_path, fps=2.5):
     for i, vid in enumerate(videos):
         print(f'Processing {vid}: {i+1} of {len(videos)}')
         
-        # Get the case ID from the video filename
+        # Getcase ID
         vname = os.path.splitext(os.path.basename(vid))[0]
-        case_id = vname.split('_')[1]  # Extracts number from case_XXXX_video.mp4
-        
-        # Look for corresponding annotation files
+        case_id = vname.split('_')[1]
         phase_csv = os.path.join(input_path, f"case_{case_id}_annotations_phases.csv")
         metadata_csv = os.path.join(input_path, f"case_{case_id}_video.csv")
         

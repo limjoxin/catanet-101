@@ -53,33 +53,11 @@ def main(output_folder, log, basepath):
     # --- glob data set
     dataLoader = {}
     for phase in training_phases:
-        print(f"\nAnalyzing paths for {phase} phase:")
-        base_path = config['data']['base_path']
-        phase_path = os.path.join(base_path, phase)
-        
-        if os.path.exists(phase_path):
-            for item in os.listdir(phase_path):
-                full_path = os.path.join(phase_path, item)
-                if os.path.isdir(full_path):
-                    print(f"- Dir:  {item} ({len(os.listdir(full_path))} items)")
-                else:
-                    print(f"- File: {item}")
-        
-        # Try different glob patterns
-        patterns = {
-            'folders_pattern': os.path.join(base_path, phase, '*'),
-            'labels_pattern': os.path.join(base_path, phase, '**', '*.csv')
-        }
-        
         data_folders = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '*')))
         labels = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '**', '*.csv')))
-
         dataset = DatasetCataract101(data_folders, img_transform=img_transform[phase], label_files=labels)
         dataLoader[phase] = DataLoader(dataset, batch_size=config[phase]['batch_size'],
                                        shuffle=(phase == 'train'), num_workers=4, pin_memory=True)
-        
-        data_folders = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '*')))
-        labels = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '**', '*.csv')))
 
     output_model_name = os.path.join(output_folder, 'catRSDNet_CNN.pth')
 

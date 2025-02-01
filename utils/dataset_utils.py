@@ -117,18 +117,12 @@ class DatasetNoLabel(torch.utils.data.Dataset):
 
 class DatasetCataract101(DatasetNoLabel):
     def __init__(self, datafolders, label_files, img_transform=None, max_len=20, fps=2.5):
-        print("\n=== Starting DatasetCataract101 Initialization ===")
-        print(f"Input datafolders: {datafolders}")
-        print(f"Input label_files: {label_files}")
-        
-        # Validate input format consistency
+
         if not isinstance(label_files, (list, tuple)):
             label_files = [label_files]
-            print("Converted label_files to list:", label_files)
             
         if not isinstance(datafolders, (list, tuple)):
             datafolders = [datafolders]
-            print("Converted datafolders to list:", datafolders)
             
         if len(label_files) != len(datafolders):
             raise ValueError(f"Number of label files ({len(label_files)}) must match number of data folders ({len(datafolders)})")
@@ -138,8 +132,6 @@ class DatasetCataract101(DatasetNoLabel):
         self.label_shapes = {}
         folder_to_valid_files = {}
         
-        # Process each folder and its corresponding label file
-        print("\n=== Processing Folders and Label Files ===")
         for folder, label_file in zip(datafolders, label_files):
             try:
                 if not os.path.exists(label_file):
@@ -147,10 +139,7 @@ class DatasetCataract101(DatasetNoLabel):
                     continue
                     
                 patientID = os.path.splitext(os.path.basename(label_file))[0]
-                print(f"\nProcessing patient {patientID}:")
-                
                 labels = np.genfromtxt(label_file, delimiter=',', skip_header=1)
-                print(f"- Label file contains {labels.shape[0]} frames")
                 
                 if labels.size == 0:
                     print(f"Warning: Label file is empty: {label_file}")
@@ -165,34 +154,19 @@ class DatasetCataract101(DatasetNoLabel):
                     matched_files = glob.glob(os.path.join(folder, pattern))
                     all_files.extend(matched_files)
                 
-                print(f"- Found {len(all_files)} total image files")
-                
                 # Filter files based on valid frame numbers
                 valid_files = []
-                invalid_files = []
                 for img_path in sorted(all_files):
                     try:
                         curr_patientID, frame = self._name2id(img_path)
                         if frame < labels.shape[0]:
                             valid_files.append(img_path)
-                        else:
-                            invalid_files.append((img_path, frame))
                     except ValueError as e:
                         print(f"Error parsing filename {img_path}: {str(e)}")
                         continue
                 
-                print(f"- Valid frames: {len(valid_files)}")
-                print(f"- Invalid frames: {len(invalid_files)}")
-                if invalid_files:
-                    print(f"- First few invalid frames (showing frame numbers):")
-                    for path, frame in invalid_files[:5]:
-                        print(f"  Frame {frame} >= {labels.shape[0]} labels")
-                
                 if valid_files:
                     folder_to_valid_files[folder] = valid_files
-                    print(f"- Successfully stored {len(valid_files)} valid files for processing")
-                else:
-                    print(f"Warning: No valid files found in folder {folder}")
                 
             except Exception as e:
                 print(f"Error processing {label_file}: {str(e)}")
@@ -203,18 +177,10 @@ class DatasetCataract101(DatasetNoLabel):
             folder for folder in datafolders 
             if folder in folder_to_valid_files and folder_to_valid_files[folder]
         ]
-        
-        print("\n=== Final Validation ===")
-        print(f"Valid folders found: {len(valid_datafolders)}")
-        print(f"Valid folders: {valid_datafolders}")
-        
+            
         if not valid_datafolders:
-            print("ERROR: No valid folders found with both PNG files and label files")
-            print(f"folder_to_valid_files contents: {folder_to_valid_files}")
             raise ValueError("No valid folders with both PNG files and label files found")
         
-        print("\n=== Initializing parent class ===")
-        # Initialize parent class with validated folders
         super().__init__(valid_datafolders, img_transform, max_len, fps)
         
         # Override image files list with filtered version
@@ -223,7 +189,3 @@ class DatasetCataract101(DatasetNoLabel):
             self.img_files.extend(folder_to_valid_files[folder])
         self.img_files = sorted(self.img_files)
         self.nitems = len(self.img_files)
-        print(f"\nFinal dataset statistics:")
-        print(f"Total number of valid images: {self.nitems}")
-        print(f"Number of patients: {len(self.label_files)}")
-        print("=== Initialization Complete ===\n")
