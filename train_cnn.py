@@ -53,11 +53,67 @@ def main(output_folder, log, basepath):
     # --- glob data set
     dataLoader = {}
     for phase in training_phases:
+        print(f"\nAnalyzing paths for {phase} phase:")
+        base_path = config['data']['base_path']
+        phase_path = os.path.join(base_path, phase)
+        
+        print(f"1. Path Analysis:")
+        print(f"- Base path: {base_path}")
+        print(f"- Phase path: {phase_path}")
+        print(f"- Base path exists?: {os.path.exists(base_path)}")
+        print(f"- Phase path exists?: {os.path.exists(phase_path)}")
+        
+        if os.path.exists(phase_path):
+            print("\n2. Directory Contents:")
+            print(f"Contents of {phase_path}:")
+            for item in os.listdir(phase_path):
+                full_path = os.path.join(phase_path, item)
+                if os.path.isdir(full_path):
+                    print(f"- Dir:  {item} ({len(os.listdir(full_path))} items)")
+                else:
+                    print(f"- File: {item}")
+        
+        # Try different glob patterns
+        print("\n3. Glob Pattern Results:")
+        patterns = {
+            'folders_pattern': os.path.join(base_path, phase, '*'),
+            'labels_pattern': os.path.join(base_path, phase, '**', '*.csv')
+        }
+        
+        for pattern_name, pattern in patterns.items():
+            print(f"\nTrying pattern '{pattern_name}': {pattern}")
+            results = glob.glob(pattern)
+            print(f"- Found {len(results)} matches")
+            if results:
+                print("First few matches:")
+                for r in results[:3]:
+                    print(f"  {r}")
         data_folders = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '*')))
         labels = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '**', '*.csv')))
+
+        print("\n4. Final Data Summary:")
+        print(f"- Found {len(data_folders)} data folders")
+        print(f"- Found {len(labels)} label files")
+
         dataset = DatasetCataract101(data_folders, img_transform=img_transform[phase], label_files=labels)
         dataLoader[phase] = DataLoader(dataset, batch_size=config[phase]['batch_size'],
                                        shuffle=(phase == 'train'), num_workers=4, pin_memory=True)
+        
+        print(f"\nChecking {phase} phase:")
+        print(f"Base path: {config['data']['base_path']}")
+        
+        data_folders = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '*')))
+        print(f"Found data folders: {data_folders}")
+        
+        labels = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '**', '*.csv')))
+        print(f"Found label files: {labels}")
+
+        for folder in data_folders:
+            print(f"\nChecking folder: {folder}")
+            png_files = glob.glob(os.path.join(folder, '*.png'))
+            print(f"  PNG files found: {len(png_files)}")
+            if png_files:
+                print(f"  Sample PNG file: {os.path.basename(png_files[0])}")
 
     output_model_name = os.path.join(output_folder, 'catRSDNet_CNN.pth')
 
@@ -198,7 +254,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--basepath',
         type=str,
-        default='data/cataract101',
+        default='data/cataract1k',
         help='path to data.'
     )
     args = parser.parse_args()

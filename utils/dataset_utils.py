@@ -8,7 +8,8 @@ import cv2
 class DatasetNoLabel(torch.utils.data.Dataset):
     """
     Dataset for folders with sampled PNG images from videos.
-    This base class handles loading image data without labels.
+    This base class handles loading image data without labels and manages temporal information.
+    It calculates surgery duration and provides time-based features for each frame.
     """
     def __init__(self, datafolders, img_transform=None, max_len=20, fps=2.5):
         super(DatasetNoLabel, self).__init__()
@@ -19,7 +20,7 @@ class DatasetNoLabel(torch.utils.data.Dataset):
         
         self.datafolders = datafolders
         self.img_transform = img_transform
-        # Calculate maximum length in frames
+        # Calculate maximum length in frames (max_len minutes * fps * 60 seconds)
         self.max_len = max_len * fps * 60.0
         # Calculate conversion factor from frames to minutes
         self.frame2min = 1/(fps * 60.0)
@@ -61,6 +62,9 @@ class DatasetNoLabel(torch.utils.data.Dataset):
         """
         Retrieves an item by index.
         Returns the image and temporal information about the surgery.
+        
+        Returns:
+            tuple: (image tensor, elapsed time, frame number, remaining surgery duration)
         """
         if not 0 <= index < self.nitems:
             raise IndexError(f"Index {index} out of range [0, {self.nitems})")
@@ -95,6 +99,9 @@ class DatasetNoLabel(torch.utils.data.Dataset):
         """
         Extracts patient ID and frame number from filename.
         Expected format: case_[patientID]_[frameNumber].png
+        
+        Returns:
+            tuple: (patient ID, zero-based frame number)
         """
         try:
             basename = os.path.splitext(os.path.basename(filename))[0]
@@ -103,23 +110,25 @@ class DatasetNoLabel(torch.utils.data.Dataset):
                 raise ValueError(f"Filename does not match expected format: {filename}")
             patientID = parts[-2]
             frame = int(parts[-1])
-            return patientID, frame - 1
+            return patientID, frame - 1  # Convert to 0-based frame numbering
         except (IndexError, ValueError) as e:
             raise ValueError(f"Error parsing filename {filename}: {str(e)}")
 
 
 class DatasetCataract101(DatasetNoLabel):
-    """
-    Dataset for Cataract-101 with labels.
-    This class extends DatasetNoLabel to include label handling and frame validation.
-    """
     def __init__(self, datafolders, label_files, img_transform=None, max_len=20, fps=2.5):
+        print("\n=== Starting DatasetCataract101 Initialization ===")
+        print(f"Input datafolders: {datafolders}")
+        print(f"Input label_files: {label_files}")
+        
         # Validate input format consistency
         if not isinstance(label_files, (list, tuple)):
             label_files = [label_files]
+            print("Converted label_files to list:", label_files)
             
         if not isinstance(datafolders, (list, tuple)):
             datafolders = [datafolders]
+            print("Converted datafolders to list:", datafolders)
             
         if len(label_files) != len(datafolders):
             raise ValueError(f"Number of label files ({len(label_files)}) must match number of data folders ({len(datafolders)})")
@@ -130,43 +139,63 @@ class DatasetCataract101(DatasetNoLabel):
         folder_to_valid_files = {}
         
         # Process each folder and its corresponding label file
+        print("\n=== Processing Folders and Label Files ===")
         for folder, label_file in zip(datafolders, label_files):
             try:
-                # Verify and load label file
                 if not os.path.exists(label_file):
-                    print(f"Warning: Skipping missing label file: {label_file}")
+                    print(f"Warning: Label file does not exist: {label_file}")
                     continue
                     
                 patientID = os.path.splitext(os.path.basename(label_file))[0]
+                print(f"\nProcessing patient {patientID}:")
+                
                 labels = np.genfromtxt(label_file, delimiter=',', skip_header=1)
+                print(f"- Label file contains {labels.shape[0]} frames")
                 
                 if labels.size == 0:
-                    print(f"Warning: Skipping empty label file: {label_file}")
+                    print(f"Warning: Label file is empty: {label_file}")
                     continue
                 
-                # Store label data
-                self.label_files[patientID] = labels[:, 1:]  # Skip first column
+                self.label_files[patientID] = labels[:, -1]
                 self.label_shapes[patientID] = labels.shape[0]
                 
                 # Find and validate image files
                 all_files = []
                 for pattern in ['*.png', '*.PNG']:
-                    all_files.extend(glob.glob(os.path.join(folder, pattern)))
+                    matched_files = glob.glob(os.path.join(folder, pattern))
+                    all_files.extend(matched_files)
+                
+                print(f"- Found {len(all_files)} total image files")
                 
                 # Filter files based on valid frame numbers
                 valid_files = []
+                invalid_files = []
                 for img_path in sorted(all_files):
                     try:
                         curr_patientID, frame = self._name2id(img_path)
                         if frame < labels.shape[0]:
                             valid_files.append(img_path)
-                    except ValueError:
+                        else:
+                            invalid_files.append((img_path, frame))
+                    except ValueError as e:
+                        print(f"Error parsing filename {img_path}: {str(e)}")
                         continue
                 
-                folder_to_valid_files[folder] = valid_files
+                print(f"- Valid frames: {len(valid_files)}")
+                print(f"- Invalid frames: {len(invalid_files)}")
+                if invalid_files:
+                    print(f"- First few invalid frames (showing frame numbers):")
+                    for path, frame in invalid_files[:5]:
+                        print(f"  Frame {frame} >= {labels.shape[0]} labels")
+                
+                if valid_files:
+                    folder_to_valid_files[folder] = valid_files
+                    print(f"- Successfully stored {len(valid_files)} valid files for processing")
+                else:
+                    print(f"Warning: No valid files found in folder {folder}")
                 
             except Exception as e:
-                print(f"Warning: Error processing {label_file}: {str(e)}")
+                print(f"Error processing {label_file}: {str(e)}")
                 continue
         
         # Create filtered list of folders with valid files
@@ -175,9 +204,16 @@ class DatasetCataract101(DatasetNoLabel):
             if folder in folder_to_valid_files and folder_to_valid_files[folder]
         ]
         
+        print("\n=== Final Validation ===")
+        print(f"Valid folders found: {len(valid_datafolders)}")
+        print(f"Valid folders: {valid_datafolders}")
+        
         if not valid_datafolders:
+            print("ERROR: No valid folders found with both PNG files and label files")
+            print(f"folder_to_valid_files contents: {folder_to_valid_files}")
             raise ValueError("No valid folders with both PNG files and label files found")
         
+        print("\n=== Initializing parent class ===")
         # Initialize parent class with validated folders
         super().__init__(valid_datafolders, img_transform, max_len, fps)
         
@@ -187,19 +223,7 @@ class DatasetCataract101(DatasetNoLabel):
             self.img_files.extend(folder_to_valid_files[folder])
         self.img_files = sorted(self.img_files)
         self.nitems = len(self.img_files)
-
-    def __getitem__(self, index):
-        """
-        Retrieves an item by index.
-        Returns the image and its corresponding label.
-        """
-        img, _, _, _ = super().__getitem__(index)
-        
-        # Extract patient ID and frame number
-        img_path = self.img_files[index]
-        patientID, frame = self._name2id(img_path)
-        
-        # Get corresponding label
-        # No need for boundary checking since we pre-filtered the files
-        label = self.label_files[patientID][frame]
-        return img, label
+        print(f"\nFinal dataset statistics:")
+        print(f"Total number of valid images: {self.nitems}")
+        print(f"Number of patients: {len(self.label_files)}")
+        print("=== Initialization Complete ===\n")
