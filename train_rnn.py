@@ -99,9 +99,15 @@ def main(output_folder, log, pretrained_model):
     num_devices = torch.cuda.device_count()
 
     # --- model
-    n_step_classes = 11
+    n_step_classes = 13
     model = CatRSDNet()
-    model.cnn.load_state_dict(torch.load(config['pretrained_model'])['model_dict'])
+    model.cnn.load_state_dict(
+        torch.load(
+            config['pretrained_model'],
+            map_location=torch.device('cpu'),
+            weights_only=True
+        )['model_dict']
+    )
     model.set_cnn_as_feature_extractor()
     model = model.to(device)
 
