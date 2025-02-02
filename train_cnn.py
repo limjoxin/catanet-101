@@ -109,10 +109,6 @@ def create_dataloaders(config, img_transform):
                 raise ValueError(f"No data folders found for {phase} phase")
             if not labels:
                 raise ValueError(f"No label files found for {phase} phase")
-                
-            print(f"\nCreating {phase} dataset:")
-            print(f"Found {len(data_folders)} data folders")
-            print(f"Found {len(labels)} label files")
             
             dataset = DatasetCataract101(data_folders, img_transform=img_transform[phase], label_files=labels)
             
@@ -124,8 +120,6 @@ def create_dataloaders(config, img_transform):
                 pin_memory=True,
                 drop_last=False
             )
-            
-            print(f"{phase} dataset size: {len(dataset)} samples")
             
         except Exception as e:
             print(f"Error creating {phase} dataloader: {str(e)}")
