@@ -85,7 +85,7 @@ def main(output_folder, log, pretrained_model):
     config['train']['weighted_loss'] = True
     config["val"]['batch_size'] = 1
     config["pretrained_model"] = pretrained_model
-    config["data"]["base_path"] = 'data/cataract101'
+    config["data"]["base_path"] = 'data/cataract1k'
     config["train"]["sequence"] = ['train_rnn', 'train_all', 'train_rnn']
     config['train']['window'] = 48
     config['input_size'] = 224
