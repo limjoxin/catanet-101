@@ -1,3 +1,4 @@
+import logging
 import torch
 import os
 import glob
@@ -5,13 +6,20 @@ import numpy as np
 import cv2
 
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True
+)
+logger = logging.getLogger(__name__)
+
 class DatasetNoLabel(torch.utils.data.Dataset):
     """
     Dataset for folders with sampled PNG images from videos.
-    This base class handles loading image data without labels and manages temporal information.
-    It calculates surgery duration and provides time-based features for each frame.
+    This base class handles loading image data without labels.
     """
     def __init__(self, datafolders, img_transform=None, max_len=20, fps=2.5):
+
         super(DatasetNoLabel, self).__init__()
         
         # Convert single folder to list for consistent handling
@@ -20,9 +28,7 @@ class DatasetNoLabel(torch.utils.data.Dataset):
         
         self.datafolders = datafolders
         self.img_transform = img_transform
-        # Calculate maximum length in frames (max_len minutes * fps * 60 seconds)
         self.max_len = max_len * fps * 60.0
-        # Calculate conversion factor from frames to minutes
         self.frame2min = 1/(fps * 60.0)
         
         # Initialize storage for surgery durations and image files
@@ -34,7 +40,7 @@ class DatasetNoLabel(torch.utils.data.Dataset):
             if not os.path.exists(d):
                 raise ValueError(f"Data folder does not exist: {d}")
                 
-            # Find all PNG files (case-insensitive)
+            # Find all PNG files
             files = []
             for pattern in ['*.png', '*.PNG']:
                 files.extend(glob.glob(os.path.join(d, pattern)))
@@ -62,9 +68,6 @@ class DatasetNoLabel(torch.utils.data.Dataset):
         """
         Retrieves an item by index.
         Returns the image and temporal information about the surgery.
-        
-        Returns:
-            tuple: (image tensor, elapsed time, frame number, remaining surgery duration)
         """
         if not 0 <= index < self.nitems:
             raise IndexError(f"Index {index} out of range [0, {self.nitems})")
@@ -77,15 +80,17 @@ class DatasetNoLabel(torch.utils.data.Dataset):
         # Convert BGR to RGB
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+        # Apply any image transformations
+        if self.img_transform is not None:
+            img = self.img_transform(img)
+        else:
+            img = torch.from_numpy(img.transpose((2, 0, 1))).float() / 255.0
+
         # Extract temporal information
         patientID, frame_number = self._name2id(img_path)
         elapsed_time = frame_number * self.frame2min
         rsd = self.surgery_length[patientID] - elapsed_time
         
-        # Apply any image transformations
-        if self.img_transform is not None:
-            img = self.img_transform(img)
-            
         # Add temporal information as an additional channel
         time_stamp = torch.ones((1, img.shape[1], img.shape[2])) * frame_number / self.max_len
         img = torch.cat((img, time_stamp.float()), dim=0)
@@ -96,28 +101,27 @@ class DatasetNoLabel(torch.utils.data.Dataset):
         return self.nitems
 
     def _name2id(self, filename):
-        """
-        Extracts patient ID and frame number from filename.
-        Expected format: case_[patientID]_[frameNumber].png
-        
-        Returns:
-            tuple: (patient ID, zero-based frame number)
-        """
         try:
             basename = os.path.splitext(os.path.basename(filename))[0]
             parts = basename.split('_')
-            if len(parts) < 2:
-                raise ValueError(f"Filename does not match expected format: {filename}")
-            patientID = parts[-2]
+            if len(parts) < 3:
+                raise ValueError(f"Filename does not match expected format 'case_patientID_frameNumber': {filename}")
+
+            patientID = f"{parts[0]}_{parts[1]}"
             frame = int(parts[-1])
-            return patientID, frame - 1  # Convert to 0-based frame numbering
+            return patientID, frame - 1
+
         except (IndexError, ValueError) as e:
             raise ValueError(f"Error parsing filename {filename}: {str(e)}")
 
 
-class DatasetCataract101(DatasetNoLabel):
+class DatasetCataract1k(DatasetNoLabel):
+    """
+    Dataset for Cataract-1K with labels.
+    This class extends DatasetNoLabel to include label handling and frame validation.
+    """
     def __init__(self, datafolders, label_files, img_transform=None, max_len=20, fps=2.5):
-
+        # Validate input format consistency
         if not isinstance(label_files, (list, tuple)):
             label_files = [label_files]
             
@@ -132,27 +136,29 @@ class DatasetCataract101(DatasetNoLabel):
         self.label_shapes = {}
         folder_to_valid_files = {}
         
+        # Process each folder and its corresponding label file
         for folder, label_file in zip(datafolders, label_files):
-            try:
+            try:              
+                # Verify and load label file
                 if not os.path.exists(label_file):
-                    print(f"Warning: Label file does not exist: {label_file}")
+                    logger.warning(f"Skipping missing label file: {label_file}")
                     continue
                     
                 patientID = os.path.splitext(os.path.basename(label_file))[0]
                 labels = np.genfromtxt(label_file, delimiter=',', skip_header=1)
                 
                 if labels.size == 0:
-                    print(f"Warning: Label file is empty: {label_file}")
+                    logger.warning(f"Skipping empty label file: {label_file}")
                     continue
                 
-                self.label_files[patientID] = labels[:, -1]
+                # Store both the shape and the actual labels
                 self.label_shapes[patientID] = labels.shape[0]
+                self.label_files[patientID] = labels
                 
                 # Find and validate image files
                 all_files = []
                 for pattern in ['*.png', '*.PNG']:
-                    matched_files = glob.glob(os.path.join(folder, pattern))
-                    all_files.extend(matched_files)
+                    all_files.extend(glob.glob(os.path.join(folder, pattern)))
                 
                 # Filter files based on valid frame numbers
                 valid_files = []
@@ -161,15 +167,12 @@ class DatasetCataract101(DatasetNoLabel):
                         curr_patientID, frame = self._name2id(img_path)
                         if frame < labels.shape[0]:
                             valid_files.append(img_path)
-                    except ValueError as e:
-                        print(f"Error parsing filename {img_path}: {str(e)}")
+                    except ValueError:
                         continue
-                
-                if valid_files:
-                    folder_to_valid_files[folder] = valid_files
+                folder_to_valid_files[folder] = valid_files
                 
             except Exception as e:
-                print(f"Error processing {label_file}: {str(e)}")
+                logger.error(f"Error processing {label_file}: {str(e)}")
                 continue
         
         # Create filtered list of folders with valid files
@@ -177,10 +180,11 @@ class DatasetCataract101(DatasetNoLabel):
             folder for folder in datafolders 
             if folder in folder_to_valid_files and folder_to_valid_files[folder]
         ]
-            
+        
         if not valid_datafolders:
             raise ValueError("No valid folders with both PNG files and label files found")
         
+        # Initialize parent class with validated folders
         super().__init__(valid_datafolders, img_transform, max_len, fps)
         
         # Override image files list with filtered version
@@ -189,3 +193,18 @@ class DatasetCataract101(DatasetNoLabel):
             self.img_files.extend(folder_to_valid_files[folder])
         self.img_files = sorted(self.img_files)
         self.nitems = len(self.img_files)
+
+    def __getitem__(self, index):
+      """
+      Retrieves an item by index.
+      Returns the image and its corresponding label as PyTorch tensors.
+      """
+      img, _, _, _ = super().__getitem__(index)
+      img_path = self.img_files[index]
+      patientID, frame = self._name2id(img_path)
+      
+      # Get corresponding label and convert it to a tensor
+      label = self.label_files[patientID][frame]
+      label_tensor = torch.from_numpy(label).float()
+      
+      return img, label_tensor
