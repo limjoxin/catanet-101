@@ -26,7 +26,7 @@ def conf2metrics(conf_mat):
     precision[np.isnan(precision)] = 0.0
 
     recall = np.diag(conf_mat) / np.sum(conf_mat, axis=1)
-    recall[np.isnan(recall)] = 0.0#
+    recall[np.isnan(recall)] = 0.0
 
     class_totals = np.sum(conf_mat, axis=1)
     empty_classes = np.where(class_totals == 0)[0]
@@ -63,7 +63,7 @@ def main(output_folder, log, pretrained_model):
     config = {'train': {}, 'val': {}, 'data': {}}
     config["train"]['batch_size'] = 1
     config["train"]['epochs'] = [50, 10, 20]
-    config["train"]["learning_rate"] = [0.001, 0.0001, 0.0005]
+    config["train"]["learning_rate"] = [0.0005, 0.0001, 0.00005]
     config['train']['weighted_loss'] = True
     config["val"]['batch_size'] = 1
     config["pretrained_model"] = pretrained_model
@@ -370,21 +370,6 @@ def validate_labels(y, n_step_classes, label_path):
         print("\nFirst few invalid labels appear at indices:", 
               torch.where(invalid_mask)[0][:5].tolist())
         print("="*50 + "\n")
-
-
-def conf2metrics(conf_mat):
-    # Add small epsilon to avoid division by zero
-    eps = 1e-7
-    
-    # Calculate metrics with zero handling
-    recall = np.diag(conf_mat) / (np.sum(conf_mat, axis=1) + eps)
-    precision = np.diag(conf_mat) / (np.sum(conf_mat, axis=0) + eps)
-    
-    # Optionally mask out classes with no examples
-    recall = np.where(np.sum(conf_mat, axis=1) > 0, recall, 0)
-    precision = np.where(np.sum(conf_mat, axis=0) > 0, precision, 0)
-    
-    return precision, recall
 
 
 if __name__ == "__main__":
