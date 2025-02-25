@@ -9,7 +9,7 @@ import wandb
 from torch.utils.data import DataLoader
 import glob
 from models.catRSDNet import CatRSDNet
-from utils.dataset_utils import DatasetCataract101
+from utils.dataset_utils import DatasetCataract1k
 from utils.logging_utils import timeSince
 from torchvision import transforms
 import csv
@@ -26,7 +26,12 @@ def conf2metrics(conf_mat):
     precision[np.isnan(precision)] = 0.0
 
     recall = np.diag(conf_mat) / np.sum(conf_mat, axis=1)
-    recall[np.isnan(recall)] = 0.0
+    recall[np.isnan(recall)] = 0.0#
+
+    class_totals = np.sum(conf_mat, axis=1)
+    empty_classes = np.where(class_totals == 0)[0]
+    if len(empty_classes) > 0:
+        print(f"Warning: No examples found for classes: {empty_classes}")
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -36,29 +41,6 @@ def conf2metrics(conf_mat):
     accuracy = np.trace(conf_mat) / np.sum(conf_mat)
     return precision, recall, f1, accuracy
 
-def align_features_and_labels(features, labels, sequence_name):
-    """
-    Align features and labels to ensure they have matching lengths.
-    
-    Args:
-        features: Tensor of shape (N, ...)
-        labels: Tensor of shape (M, ...)
-        sequence_name: String identifier for logging purposes
-    
-    Returns:
-        Tuple of aligned (features, labels)
-    """
-    if len(features) != len(labels):
-        min_length = min(len(features), len(labels))
-        
-        if abs(len(features) - len(labels)) > 5:
-            print(f"WARNING: Large length difference detected in {sequence_name}")
-            
-        features = features[:min_length]
-        labels = labels[:min_length]
-    assert len(features) == len(labels), f"Alignment failed for {sequence_name}"
-    
-    return features, labels
 
 def validate_batch_dimensions(predictions, targets, sequence_name):
     """
@@ -94,77 +76,60 @@ def main(output_folder, log, pretrained_model):
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 
-    #specify if we should use a GPU (cuda) or only the CPU
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     num_devices = torch.cuda.device_count()
 
     # --- model
     n_step_classes = 13
     model = CatRSDNet()
-    model.cnn.load_state_dict(
-        torch.load(
-            config['pretrained_model'],
-            map_location=torch.device('cpu'),
-            weights_only=True
-        )['model_dict']
-    )
+    model.cnn.load_state_dict(torch.load(config['pretrained_model'])['model_dict'])
     model.set_cnn_as_feature_extractor()
     model = model.to(device)
 
-    # --- training params
     training_phases = ['train', 'val']
     validation_phases = ['val']
 
-    # --- logging
     if log:
         run = wandb.init(project='cataract_rsd', group='catnet')
         run.name = run.id
 
     output_model_name = os.path.join(output_folder, 'catRSDNet.pth')
 
-    # --- pre-processing data
-    print('collect dataset')
-    # glob all video files and perform forward pass through CNN. Store the features in npy-arrays for RNN training
     img_transform = transforms.Compose([transforms.ToPILImage(),
-                                        transforms.Resize(config['input_size']),
-                                        transforms.ToTensor()])
-    # --- glob data set
+                                      transforms.Resize(config['input_size']),
+                                      transforms.ToTensor()])
+    
     sequences_path = {key:{} for key in training_phases}
     sequences_path['train']['label'] = sorted(glob.glob(os.path.join(config['data']['base_path'], 'train','**','*.csv')))
     sequences_path['val']['label'] = sorted(glob.glob(os.path.join(config['data']['base_path'], 'val', '**', '*.csv')))
     sequences_path['train']['video'] = sorted(glob.glob(os.path.join(config['data']['base_path'], 'train', '*/')))
     sequences_path['val']['video'] = sorted(glob.glob(os.path.join(config['data']['base_path'], 'val', '*/')))
 
-    print('number of sequences: train {0}, val {1}'.format(len(sequences_path['train']['label']),
-                                                           len(sequences_path['val']['label'])))
     # --- Loss and Optimizer
-    # loss function
     if config['train']['weighted_loss']:
         label_sum = np.zeros(n_step_classes)
         for fname_label in sequences_path['train']['label']:
-            labels = np.genfromtxt(fname_label, delimiter=',', skip_header=1)[:, 1]
+            labels = np.genfromtxt(fname_label, delimiter=',', skip_header=1)[:, 0]
             for l in range(n_step_classes):
                 label_sum[l] += np.sum(labels==l)
-        loss_weights = 1 / label_sum
-        loss_weights[label_sum == 0] = 0.0
-        loss_weights = torch.tensor(loss_weights / np.max(loss_weights)).float().to(device)
+        # loss_weights = 1 / label_sum
+        # loss_weights[label_sum == 0] = 0.0
+        # loss_weights = torch.tensor(loss_weights / np.max(loss_weights)).float().to(device)
+        loss_weights = compute_balanced_weights(label_sum).to(device)
     else:
         loss_weights = None
 
     step_criterion = nn.CrossEntropyLoss(weight=loss_weights)
-    experience_criterion = nn.CrossEntropyLoss()
     rsd_criterion = nn.L1Loss()
 
-    # --- training
-    # training steps:
     training_steps = config['train']['sequence']
-
     remaining_steps = training_steps.copy()
     print(' start training... ')
 
     start_time = time.time()
     non_improving_val_counter = 0
     features = {}
+    
     for step_count, training_step in enumerate(training_steps):
         print(training_step)
         if step_count > 0:
@@ -172,20 +137,18 @@ def main(output_folder, log, pretrained_model):
             model.load_state_dict(checkpoint['model_dict'])
         best_loss_on_val = np.Infinity
         stop_epoch = config['train']['epochs'][step_count]
-        # optimizer
+        
         optim = torch.optim.Adam([{'params': model.rnn.parameters()},
-                                  {'params': model.cnn.parameters(), 'lr': config['train']['learning_rate'][step_count] / 20}],
-                                  lr=config['train']['learning_rate'][step_count])
+                                {'params': model.cnn.parameters(), 'lr': config['train']['learning_rate'][step_count] / 20}],
+                                lr=config['train']['learning_rate'][step_count])
 
         if training_step == 'train_rnn':
-            # pre-compute features
             if len(features) == 0:
                 model.eval()
                 sequences = list(zip(sequences_path['train']['label']+sequences_path['val']['label'],
-                                     sequences_path['train']['video']+sequences_path['val']['video']))
+                                   sequences_path['train']['video']+sequences_path['val']['video']))
                 for ii, (label_path, input_path) in enumerate(sequences):
-                    print(input_path)
-                    data = DatasetCataract101([input_path], [label_path], img_transform=img_transform)
+                    data = DatasetCataract1k([input_path], [label_path], img_transform=img_transform)
                     dataloader = DataLoader(data, batch_size=500, shuffle=False, num_workers=1, pin_memory=True)
                     features[input_path] = []
                     for i, (X, _) in enumerate(dataloader):
@@ -202,96 +165,99 @@ def main(output_folder, log, pretrained_model):
             raise RuntimeError('training step {0} not implemented'.format(training_step))
 
         for epoch in range(stop_epoch):
-            #zero out epoch based performance variables
             all_precision = {}
             average_precision = {}
             all_recall = {}
             average_recall = {}
             all_f1 = {}
             average_f1 = {}
-            accuracy_exp = {}
             conf_mat = {key: np.zeros((n_step_classes, n_step_classes)) for key in validation_phases}
-            conf_mat_exp = {key: np.zeros((2, 2)) for key in validation_phases}
             all_loss = {key: torch.zeros(0).to(device) for key in training_phases}
             all_loss_step = {key: torch.zeros(0).to(device) for key in training_phases}
-            all_loss_experience = {key: torch.zeros(0).to(device) for key in training_phases}
             all_loss_rsd = {key: torch.zeros(0).to(device) for key in training_phases}
 
-            for phase in training_phases: #iterate through both training and validation states
+            for phase in training_phases:
                 sequences = list(zip(sequences_path[phase]['label'], sequences_path[phase]['video']))
                 if phase == 'train':
-                    model.train()  # Set model to training mode
-                    random.shuffle(sequences)  # random shuffle training sequences
-                    model.cnn.eval()  # required due to batch-norm, even when training end-to-end
+                    model.train()
+                    random.shuffle(sequences)
+                    model.cnn.eval()
                 else:
-                    model.eval()   # Set model to evaluate mode
+                    model.eval()
 
                 for ii, (label_path, input_path) in enumerate(sequences):
                     if (training_step == 'train_rnn') | (training_step == 'train_fc'):
-                        # Load labels
-                        label = torch.tensor(np.genfromtxt(label_path, delimiter=',', skip_header=1)[:, 1:])
+                        raw_labels = np.genfromtxt(label_path, delimiter=',', skip_header=1)[:, [0, 3]]
+                        sample_ratio = 59.94 / 2.5  # Original fps / New fps
+                        
+                        # Subsample the labels to match the CNN features
+                        sampled_indices = np.arange(0, len(raw_labels), sample_ratio).astype(int)
+                        sampled_labels = raw_labels[sampled_indices]
+
+                        # Convert to tensors
+                        label = torch.tensor(sampled_labels)
                         features_tensor = torch.tensor(features[input_path])
+
+                        # verify both have same length
+                        if label.shape[0] != features_tensor.shape[0]:
+                            min_len = min(features_tensor.shape[0], label.shape[0])
+                            features_tensor = features_tensor[:min_len]
+                            label = label[:min_len]
                         
-                        # Align features and labels
-                        features_tensor, label = align_features_and_labels(
-                            features_tensor, 
-                            label,
-                            os.path.basename(input_path)
-                        )
-                        
-                        # Create dataloader with aligned data
                         dataloader = [(features_tensor.unsqueeze(0), label)]
                         skip_features = True
                     else:
                         batch_size = config['train']['window']
-                        data = DatasetCataract101([input_path], [label_path], img_transform=img_transform)
+                        data = DatasetCataract1k([input_path], [label_path], img_transform=img_transform)
                         dataloader = DataLoader(data, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
                         skip_features = False
 
                     for i, (X, y) in enumerate(dataloader):
-                        if len(y.shape) > 2: # batch-size is automatically removed from tensor dimensions for label
+                        if len(y.shape) > 2:
                             y = y.squeeze()
-                        y_experience = torch.add(y[:, 2], -1).long().to(device)
-                        y_rsd = (y[:, 5]/60.0/25.0).float().to(device)
-                        y = y[:, 0].long().to(device)
+
+                        validate_labels(y, n_step_classes, os.path.basename(input_path))
+
+                        y_step = y[:, 0].long().to(device)
+                        y_rsd = (y[:, 1]/60.0/25.0).float().to(device)
                         X = X.float().to(device)
 
                         with torch.set_grad_enabled(phase == 'train'):
                             stateful = (i > 0)
-                            step_prediction, experience_prediction, rsd_prediction = model.forwardRNN(X, stateful=stateful,
-                                                                                      skip_features=skip_features)
+                            step_prediction, rsd_prediction = model.forwardRNN(X, stateful=stateful,
+                                                                            skip_features=skip_features)
+                            
                             validate_batch_dimensions(
                                 step_prediction,
-                                y,
+                                y_step,
                                 f"{os.path.basename(input_path)} - batch {i}"
                             )
-                            loss_step = step_criterion(step_prediction, y)
-                            loss_experience = experience_criterion(experience_prediction, y_experience)
+                            
+                            loss_step = step_criterion(step_prediction, y_step)
                             rsd_prediction = rsd_prediction.squeeze(1)
                             loss_rsd = rsd_criterion(rsd_prediction, y_rsd)
-                            loss = loss_step + 0.3 * loss_experience + loss_rsd
-                            if phase == 'train':  # in case we're in train mode, need to do back propagation
+                            loss = loss_step + loss_rsd
+
+                            if phase == 'train':
                                 optim.zero_grad()
                                 loss.backward()
                                 optim.step()
 
                             all_loss[phase] = torch.cat((all_loss[phase], loss.detach().view(1, -1)))
                             all_loss_step[phase] = torch.cat((all_loss_step[phase], loss_step.detach().view(1, -1)))
-                            all_loss_experience[phase] = torch.cat((all_loss_experience[phase], loss_experience.detach().view(1, -1)))
                             all_loss_rsd[phase] = torch.cat((all_loss_rsd[phase], loss_rsd.detach().view(1, -1)))
+
                         if phase in validation_phases:
                             hard_prediction = torch.argmax(step_prediction.detach(), dim=1).cpu().numpy()
-                            hard_prediction_exp = torch.argmax(experience_prediction.detach(), dim=1).cpu().numpy()
-                            conf_mat[phase] += confusion_matrix(y.cpu().numpy(), hard_prediction, labels=np.arange(n_step_classes))
-                            conf_mat_exp[phase] += confusion_matrix(y_experience.cpu().numpy(), hard_prediction_exp, labels=np.arange(2))
+                            conf_mat[phase] += confusion_matrix(y_step.cpu().numpy(), hard_prediction, 
+                                                             labels=np.arange(n_step_classes))
 
                 all_loss[phase] = all_loss[phase].cpu().numpy().mean()
                 all_loss_step[phase] = all_loss_step[phase].cpu().numpy().mean()
-                all_loss_experience[phase] = all_loss_experience[phase].cpu().numpy().mean()
                 all_loss_rsd[phase] = all_loss_rsd[phase].cpu().numpy().mean()
+
                 if phase in validation_phases:
                     precision, recall, f1, accuracy = conf2metrics(conf_mat[phase])
-                    accuracy_exp[phase] = conf2metrics(conf_mat_exp[phase])[3]
                     all_precision[phase] = precision
                     all_recall[phase] = recall
                     average_precision[phase] = np.mean(all_precision[phase])
@@ -301,22 +267,24 @@ def main(output_folder, log, pretrained_model):
 
                 if log:
                     log_epoch = step_count*epoch+epoch
-                    wandb.log({'epoch': log_epoch, f'{phase}/loss': all_loss[phase],
-                               f'{phase}/loss_rsd': all_loss_rsd[phase],
-                               f'{phase}/loss_step': all_loss_step[phase],
-                               f'{phase}/loss_exp': all_loss_experience[phase]})
+                    wandb.log({'epoch': log_epoch, 
+                             f'{phase}/loss': all_loss[phase],
+                             f'{phase}/loss_rsd': all_loss_rsd[phase],
+                             f'{phase}/loss_step': all_loss_step[phase]})
                     if ((epoch % config['val']['test_every']) == 0) & (phase in validation_phases):
-                        wandb.log({'epoch': log_epoch, f'{phase}/precision': average_precision[phase],
-                                   f'{phase}/recall': average_recall[phase], f'{phase}/f1': average_f1[phase],
-                                   f'{phase}/exp_acc': accuracy_exp[phase]})
-            log_text = '%s ([%d/%d] %d%%), train loss: %.4f val loss: %.4f lp: %.4f le: %.4f' % \
-                       (timeSince(start_time, (epoch + 1) / stop_epoch),
-                        epoch + 1, stop_epoch, (epoch + 1) / stop_epoch * 100,
-                        all_loss['train'], all_loss['val'], all_loss_step['val'], all_loss_experience['val'])
-            log_text += ' val precision: {0:.4f}, recall: {1:.4f}, f1: {2:.4f}, acc_exp: {3:.4f}'.format(average_precision['val'],
-                                                                                       average_recall['val'],
-                                                                                       average_f1['val'],
-                                                                                        accuracy_exp['val'])
+                        wandb.log({'epoch': log_epoch, 
+                                 f'{phase}/precision': average_precision[phase],
+                                 f'{phase}/recall': average_recall[phase], 
+                                 f'{phase}/f1': average_f1[phase]})
+
+            log_text = '%s ([%d/%d] %d%%), train loss: %.4f val loss: %.4f lp: %.4f' % \
+                      (timeSince(start_time, (epoch + 1) / stop_epoch),
+                       epoch + 1, stop_epoch, (epoch + 1) / stop_epoch * 100,
+                       all_loss['train'], all_loss['val'], all_loss_step['val'])
+            log_text += ' val precision: {0:.4f}, recall: {1:.4f}, f1: {2:.4f}'.format(
+                average_precision['val'],
+                average_recall['val'],
+                average_f1['val'])
             print(log_text, end='')
 
             # if current loss is the best we've seen, save model state
@@ -339,13 +307,84 @@ def main(output_folder, log, pretrained_model):
                     wandb.summary['best_epoch'] = epoch + 1
                     wandb.summary['best_loss_on_val'] = best_loss_on_val
                     wandb.summary['f1'] = average_f1['val']
-                    wandb.summary['exp_acc'] = accuracy_exp['val']
 
             else:
                 print('')
                 non_improving_val_counter += 1
         remaining_steps.pop(0)
     print('...finished training ')
+
+def compute_balanced_weights(label_sum):
+    """
+    Compute class weights with numerical stability in mind:
+    - Non-empty classes get weights inversely proportional to their count
+    - Empty classes get a tiny weight (near-zero but not exactly zero)
+    - Weights are normalized considering only non-empty classes
+    """
+    epsilon = 1e-7
+
+    # Create mask for non-empty classes
+    non_empty_mask = label_sum > 0
+    
+    # Initialize weights array with minimum weight
+    weights = np.full_like(label_sum, epsilon, dtype=float)
+    
+    # Compute weights only for non-empty classes
+    weights[non_empty_mask] = 1.0 / (label_sum[non_empty_mask] + epsilon)
+    
+    # Normalize non-zero weights
+    num_active_classes = non_empty_mask.sum()
+    non_zero_sum = weights[non_empty_mask].sum()
+    weights[non_empty_mask] *= (num_active_classes / non_zero_sum)
+    
+    print("\nClass weights:")
+    for i in range(len(weights)):
+        print(f"Class {i}: {weights[i]:.8f} ({int(label_sum[i])} examples)")
+            
+    return torch.tensor(weights).float()
+
+def validate_labels(y, n_step_classes, label_path):
+    """
+    Validate the labels and print detailed information about any issues found.
+    
+    Args:
+        y: Input labels tensor
+        n_step_classes: Number of expected classes
+        label_path: Full path to the CSV file being processed
+    """
+    # Get step labels (first column)
+    step_labels = y[:, 0]
+    
+    # Get unique labels and their counts
+    unique_labels, counts = torch.unique(step_labels, return_counts=True)
+    
+    # Check for invalid labels
+    invalid_mask = (step_labels >= n_step_classes) | (step_labels < 0)
+    if invalid_mask.any():
+        print("\n" + "="*50)
+        print(f"INVALID LABELS FOUND IN: {label_path}")
+        print(f"Total samples in file: {len(step_labels)}")
+        print("\nLabel distribution:")
+        for label, count in zip(unique_labels, counts):
+            print(f"Label {label:.0f}: {count} samples")
+        print("\nFirst few invalid labels appear at indices:", 
+              torch.where(invalid_mask)[0][:5].tolist())
+        print("="*50 + "\n")
+
+
+def conf2metrics(conf_mat):
+    # Add small epsilon to avoid division by zero
+    eps = 1e-7
+    
+    # Calculate metrics with zero handling
+    recall = np.diag(conf_mat) / (np.sum(conf_mat, axis=1) + eps)
+    precision = np.diag(conf_mat) / (np.sum(conf_mat, axis=0) + eps)
+    
+    # Optionally mask out classes with no examples
+    recall = np.where(np.sum(conf_mat, axis=1) > 0, recall, 0)
+    precision = np.where(np.sum(conf_mat, axis=0) > 0, precision, 0)
+    
+    return precision, recall
 
 
 if __name__ == "__main__":
@@ -383,3 +422,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     main(output_folder=args.out, log=args.log, pretrained_model=args.pretrained)
+

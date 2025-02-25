@@ -5,7 +5,6 @@ import os
 import argparse
 import numpy as np
 import sys
-import yaml
 import time
 import wandb
 from models.catRSDNet import CatRSDNet
