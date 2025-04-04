@@ -8,7 +8,7 @@ import sys
 import time
 import wandb
 from models.catRSDNet import CatRSDNet
-from utils.dataset_utils import DatasetCataract1k
+from utils.dataset_utils import DatasetCataract1k, debug_label_files
 from utils.logging_utils import timeSince
 import glob
 from sklearn.metrics import confusion_matrix
@@ -27,6 +27,7 @@ def main(output_folder, log, basepath):
     config["val"]['batch_size'] = 150
     config['input_size'] = [224, 224]
     config['data']['base_path'] = basepath
+    config['train']['min_frames_per_phase'] = 30
 
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
@@ -51,12 +52,38 @@ def main(output_folder, log, basepath):
         run.name = run.id
     # --- glob data set
     dataLoader = {}
+    underrepresented_classes = [0, 1, 6, 7, 8, 9]
+
     for phase in training_phases:
         data_folders = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '*')))
         labels = sorted(glob.glob(os.path.join(config['data']['base_path'], phase, '**', '*.csv')))
-        dataset = DatasetCataract1k(data_folders, img_transform=img_transform[phase], label_files=labels)
-        dataLoader[phase] = DataLoader(dataset, batch_size=config[phase]['batch_size'],
-                                       shuffle=(phase == 'train'), num_workers=4, pin_memory=True)
+
+        # Only use balanced sampling and enhanced transformations for training
+        if phase == 'train':
+            dataset = DatasetCataract1k(
+                data_folders, 
+                label_files=labels,
+                img_transform=img_transform[phase],
+                min_frames_per_phase=config['train']['min_frames_per_phase'],
+                balanced_sampling=True,
+                training_mode=True,
+                underrepresented_classes=underrepresented_classes
+            )
+        else:
+            dataset = DatasetCataract1k(
+                data_folders, 
+                label_files=labels,
+                img_transform=img_transform[phase],
+                training_mode=False
+            )
+        
+        dataLoader[phase] = DataLoader(
+            dataset, 
+            batch_size=config[phase]['batch_size'],
+            shuffle=(phase == 'train'), 
+            num_workers=4, 
+            pin_memory=True
+        )
 
     output_model_name = os.path.join(output_folder, 'catRSDNet_CNN.pth')
 
@@ -81,19 +108,12 @@ def main(output_folder, log, basepath):
     max_grad_norm = 1.0
 
     # debugging label files
-    # label_sum = analyze_label_files(config['data']['base_path'], n_step_classes)
+    print("Analyzing label files before computing weights...")
+    label_sum = debug_label_files(config['data']['base_path'], n_step_classes)
 
     # --- loss
     # loss function
     if config['train']['weighted_loss']:
-        label_sum = np.zeros(n_step_classes)
-        for fname_label in glob.glob(os.path.join(config['data']['base_path'], 'train', '**', '*.csv')):
-            labels = np.genfromtxt(fname_label, delimiter=',', skip_header=1)[:, 1]
-            for l in range(n_step_classes):
-                label_sum[l] += np.sum(labels==l)
-        # loss_weights = 1 / label_sum
-        # loss_weights[label_sum == 0] = 0.0
-        # loss_weights = torch.tensor(loss_weights / np.max(loss_weights)).float().to(device)
         loss_weights = compute_balanced_weights(label_sum).to(device)
     else:
         loss_weights = None
@@ -102,7 +122,7 @@ def main(output_folder, log, basepath):
     criterion = nn.CrossEntropyLoss(weight=loss_weights)
 
     # --- training
-    best_loss_on_test = np.Infinity
+    best_loss_on_test = np.inf
     start_time = time.time()
     stop_epoch = config['train']['epochs']
 

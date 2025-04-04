@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from typing import TypeVar
+from torch.nn import Module
 from torchvision.models import densenet169, DenseNet169_Weights
 import numpy as np
 
@@ -74,19 +75,148 @@ class CatRSDNet(nn.Module):
     def freeze_rnn(self, freeze=True):
         for param in self.rnn.parameters():
             param.requires_grad = not freeze
+    
+    def freeze_early_cnn_layers(self, freeze=True):
+        """
+        Freeze early layers of the CNN backbone while keeping later layers trainable.
+        This is useful for fine-tuning only the deeper layers which contain more task-specific features.
+        
+        Args:
+            freeze (bool): If True, freeze the early layers; if False, make them trainable.
+        """
+        # Assuming the CNN is a ResNet or similar architecture with named modules
+        # We'll freeze all layers up to the final block
+        
+        # First, check what type of CNN we have to determine the freezing strategy
+        cnn_name = self.cnn.__class__.__name__.lower()
+        
+        if hasattr(self.cnn, 'layer1') and hasattr(self.cnn, 'layer2') and hasattr(self.cnn, 'layer3') and hasattr(self.cnn, 'layer4'):
+            # ResNet-like structure with named layer blocks
+            print(f"Identified ResNet-like architecture with named layers")
+            
+            # Freeze or unfreeze early layers (conv1, bn1, layer1, layer2)
+            for name, param in self.cnn.named_parameters():
+                if any(x in name for x in ['conv1', 'bn1', 'layer1', 'layer2']):
+                    param.requires_grad = not freeze
+                    
+            print(f"Early CNN layers frozen: {freeze}")
+            
+        elif hasattr(self.cnn, 'features') and hasattr(self.cnn, 'classifier'):
+            # VGG or similar structure with features and classifier
+            print(f"Identified VGG-like architecture with features and classifier")
+            
+            # For VGG-like networks, freeze first 2/3 of the feature extractor
+            features = list(self.cnn.features)
+            freeze_until = len(features) * 2 // 3
+            
+            for i, param in enumerate(self.cnn.features.parameters()):
+                if i < freeze_until:
+                    param.requires_grad = not freeze
+                    
+            print(f"Early CNN layers frozen: {freeze} (first {freeze_until}/{len(features)} feature layers)")
+            
+        else:
+            # Generic approach - freeze first half of all parameters
+            print("Using generic approach to freeze early layers")
+            
+            all_params = list(self.cnn.named_parameters())
+            freeze_until = len(all_params) // 2
+            
+            for i, (name, param) in enumerate(all_params):
+                if i < freeze_until:
+                    param.requires_grad = not freeze
+                    
+            print(f"Early CNN layers frozen: {freeze} (first {freeze_until}/{len(all_params)} parameters)")
+        
+    def freeze_late_cnn_layers(self, freeze=True):
+        """
+        Freeze late (deeper) layers of the CNN backbone while keeping early layers trainable.
+        This is the opposite of freeze_early_cnn_layers.
+        
+        Args:
+            freeze (bool): If True, freeze the late layers; if False, make them trainable.
+        """
+        # Similar approach as freeze_early_cnn_layers but for later layers
+        
+        cnn_name = self.cnn.__class__.__name__.lower()
+        
+        if hasattr(self.cnn, 'layer1') and hasattr(self.cnn, 'layer2') and hasattr(self.cnn, 'layer3') and hasattr(self.cnn, 'layer4'):
+            # ResNet-like structure
+            for name, param in self.cnn.named_parameters():
+                if any(x in name for x in ['layer3', 'layer4', 'fc']):
+                    param.requires_grad = not freeze
+                    
+            print(f"Late CNN layers frozen: {freeze}")
+            
+        elif hasattr(self.cnn, 'features') and hasattr(self.cnn, 'classifier'):
+            # VGG or similar structure
+            features = list(self.cnn.features)
+            freeze_from = len(features) * 2 // 3
+            
+            for i, param in enumerate(self.cnn.features.parameters()):
+                if i >= freeze_from:
+                    param.requires_grad = not freeze
+                    
+            # Also handle the classifier
+            for param in self.cnn.classifier.parameters():
+                param.requires_grad = not freeze
+                    
+            print(f"Late CNN layers frozen: {freeze} (last {len(features) - freeze_from}/{len(features)} feature layers and classifier)")
+            
+        else:
+            # Generic approach
+            all_params = list(self.cnn.named_parameters())
+            freeze_from = len(all_params) // 2
+            
+            for i, (name, param) in enumerate(all_params):
+                if i >= freeze_from:
+                    param.requires_grad = not freeze
+                    
+            print(f"Late CNN layers frozen: {freeze} (last {len(all_params) - freeze_from}/{len(all_params)} parameters)")
+
+    @staticmethod
+    def get_trainable_cnn_params(model):
+        """
+        Get all trainable parameters from the CNN.
+        This is useful for creating parameter groups with different learning rates.
+        
+        Args:
+            model: The CatRSDNet model
+            
+        Returns:
+            List of trainable parameters from the CNN
+        """
+        return [param for param in model.cnn.parameters() if param.requires_grad]
 
     def initCNN(self, feature_size, n_classes_1):
         """Initialize CNN with modified classifier for step prediction only"""
+        # Load model with pre-trained weights
         cnn = densenet169(weights=DenseNet169_Weights.IMAGENET1K_V1)
-        tmp_conv_weights = cnn.features.conv0.weight.data.clone()
-        cnn.features.conv0 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        cnn.features.conv0.weight.data[:, :3, :, :] = tmp_conv_weights.clone()
+        
+        # Get the current state dictionary
+        state_dict = cnn.state_dict()
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            # Check if the key follows the pattern with dots (norm.1, conv.1)
+            if '.norm.' in key or '.conv.' in key:
+                new_key = key.replace('norm.1', 'norm1').replace('conv.1', 'conv1').replace('norm.2', 'norm2').replace('conv.2', 'conv2')
+                new_state_dict[new_key] = value
+            else:
+                # Keep keys that don't need transformation
+                new_state_dict[key] = value
+        
+        cnn_fixed = densenet169(weights=None)
+        cnn_fixed.load_state_dict(new_state_dict)
+        
+        tmp_conv_weights = cnn_fixed.features.conv0.weight.data.clone()
+        cnn_fixed.features.conv0 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        cnn_fixed.features.conv0.weight.data[:, :3, :, :] = tmp_conv_weights.clone()
         mean_weights = torch.mean(tmp_conv_weights[:, :3, :, :], dim=1)
-        cnn.features.conv0.weight.data[:, 3, :, :] = mean_weights
-
+        cnn_fixed.features.conv0.weight.data[:, 3, :, :] = mean_weights
+        
         # Modified classifier for step prediction only
-        cnn.classifier = Parallel_fc(n_in=feature_size, n_1=n_classes_1)
-        return cnn
+        cnn_fixed.classifier = Parallel_fc(n_in=feature_size, n_1=n_classes_1)
+        return cnn_fixed
 
     def set_cnn_as_feature_extractor(self):
         self.cnn.classifier = torch.nn.Identity()
