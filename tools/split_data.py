@@ -126,84 +126,68 @@ def balanced_frame_based_split(videos, stats, val_ratio=0.2, test_ratio=0.1, min
     """
     np.random.seed(seed)
     
-    # Get all unique phases in the dataset
     all_phases = set(stats['phase_counts'].keys())
     
-    # Create a copy of the videos list to ensure we don't add the same video to multiple splits
     available_videos = videos.copy()
     
-    # Videos assigned to each split
     train_videos = []
     val_videos = []
     test_videos = []
     
-    # Track frames per phase in each split
     train_frames_per_phase = defaultdict(int)
     val_frames_per_phase = defaultdict(int)
     test_frames_per_phase = defaultdict(int)
     
-    # Sort phases by rarity (ascending)
     sorted_phases = sorted(all_phases, key=lambda p: stats['phase_counts'][p])
     
-    # First, ensure rare phases are represented in all splits
     for phase in sorted_phases:
-        # Filter to only include videos that are still available
         videos_with_phase = [(v, c) for v, c in stats['videos_by_phase'][phase] if v in available_videos]
         
         if not videos_with_phase:
             continue
             
-        # Sort videos by how many frames they have of this phase (descending)
         videos_with_phase.sort(key=lambda x: x[1], reverse=True)
         
-        # Try to distribute videos with this phase across splits
-        # For very rare phases, we need to make sure each split gets some representation
         if len(videos_with_phase) >= 3:
-            np.random.shuffle(videos_with_phase)  # Shuffle for randomness
+            np.random.shuffle(videos_with_phase)
             
-            # Calculate how many videos should go to each split for this phase
             test_count = max(1, int(len(videos_with_phase) * test_ratio))
             val_count = max(1, int(len(videos_with_phase) * val_ratio))
             train_count = len(videos_with_phase) - val_count - test_count
             
-            # Ensure at least one video per split if possible
             if train_count < 1:
                 train_count = 1
                 val_count = max(1, len(videos_with_phase) - train_count - test_count)
             
-            # Limit to available videos
             test_count = min(test_count, len(videos_with_phase))
             val_count = min(val_count, len(videos_with_phase) - test_count)
             train_count = len(videos_with_phase) - val_count - test_count
             
-            # Assign videos to splits
             for i, (video_path, count) in enumerate(videos_with_phase):
                 if video_path not in available_videos:
-                    continue  # Skip if already assigned
+                    continue
                     
                 if i < test_count:
                     test_videos.append(video_path)
-                    available_videos.remove(video_path)  # Mark as used
-                    # Add all phases from this video to test counts
+                    available_videos.remove(video_path)
                     for p, c in stats['phases_per_video'][video_path].items():
                         test_frames_per_phase[p] += c
+
                 elif i < test_count + val_count:
                     val_videos.append(video_path)
-                    available_videos.remove(video_path)  # Mark as used
-                    # Add all phases from this video to val counts
+                    available_videos.remove(video_path)
                     for p, c in stats['phases_per_video'][video_path].items():
                         val_frames_per_phase[p] += c
+
                 else:
                     train_videos.append(video_path)
-                    available_videos.remove(video_path)  # Mark as used
-                    # Add all phases from this video to train counts
+                    available_videos.remove(video_path)
                     for p, c in stats['phases_per_video'][video_path].items():
                         train_frames_per_phase[p] += c
         elif len(videos_with_phase) == 2:
-            # If only 2 videos have this phase, put one in train and one in val
             for i, (video_path, count) in enumerate(videos_with_phase):
                 if video_path not in available_videos:
-                    continue  # Skip if already assigned
+                    continue
                     
                 if i == 0:
                     train_videos.append(video_path)
@@ -450,9 +434,9 @@ def main():
     
     print(f"Found {len(video_dirs)} video directories in {args.input}")
     
-    # Analyze the dataset
+    # # Analyze the dataset
     stats = analyze_dataset(video_dirs)
-    print_dataset_stats(stats)
+    # print_dataset_stats(stats)
     
     # Create output directories if they don't exist
     for phase in ['train', 'val', 'test']:
@@ -472,12 +456,10 @@ def main():
           f"{len(test_videos)} test videos")
     
     # Analyze the phase distribution in each split
-    analyze_split_distribution(train_videos, val_videos, test_videos, stats)
+    # analyze_split_distribution(train_videos, val_videos, test_videos, stats)
     
-    # Move files to their respective directories
     moved_success = 0
     
-    # Use a dictionary to track which split each video is assigned to
     video_to_split = {}
     for video in train_videos:
         video_to_split[video] = 'train'
@@ -490,22 +472,18 @@ def main():
         video_id = os.path.basename(video_path)
         dst_path = os.path.join(args.out, split, video_id)
         
-        # Skip if source and destination are the same
         if os.path.normpath(video_path) == os.path.normpath(dst_path):
             continue
             
         try:
-            # Make sure the destination directory exists
             os.makedirs(os.path.dirname(dst_path), exist_ok=True)
             
-            # Handle existing destination if needed
             if os.path.exists(dst_path):
                 if os.path.isdir(dst_path):
                     shutil.rmtree(dst_path)
                 else:
                     os.remove(dst_path)
             
-            # Perform the move operation
             shutil.move(video_path, dst_path)
             moved_success += 1
         except Exception as e:
