@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from typing import TypeVar
 from torch.nn import Module
-from torchvision.models import densenet169, DenseNet169_Weights
+from torchvision.models import densenet169, DenseNet169_Weights, resnet50, ResNet50_Weights
 import numpy as np
 
 T = TypeVar('T', bound='Module')
@@ -54,6 +54,98 @@ class Parallel_fc(nn.Module):
 
     def forward(self, X):
         return self.fc1(X.clone())
+
+
+class EnhancedCatRSDNet(nn.Module):
+    """
+    Enhanced CNN model based on a pre-trained ResNet50 backbone.
+    This model is designed for improved performance on cataract surgery tool detection.
+    """
+    def __init__(self, n_classes=13, dropout_rate=0.5):
+        super(EnhancedCatRSDNet, self).__init__()
+        
+        # Load the pretrained model
+        self.backbone = resnet50(weights=ResNet50_Weights.DEFAULT)
+        
+        # Modify first conv layer to accept 4 channels (RGB + timestamp)
+        original_layer = self.backbone.conv1
+        self.backbone.conv1 = nn.Conv2d(
+            4,  # Change from 3 to 4 channels
+            original_layer.out_channels, 
+            kernel_size=original_layer.kernel_size,
+            stride=original_layer.stride,
+            padding=original_layer.padding,
+            bias=(original_layer.bias is not None)
+        )
+        
+        # Initialize the 4th channel with mean of RGB channels
+        with torch.no_grad():
+            self.backbone.conv1.weight[:, :3, :, :] = original_layer.weight
+            self.backbone.conv1.weight[:, 3:4, :, :] = torch.mean(original_layer.weight, dim=1, keepdim=True)
+        
+        # Create features extractor (all layers except classifier)
+        self.features = nn.Sequential(*list(self.backbone.children())[:-1])
+        
+        # Add custom classification head
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(2048, 1024),  # ResNet50 outputs 2048-dimensional features
+            nn.BatchNorm1d(1024),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(1024, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(512, n_classes)
+        )
+    
+    def forward(self, x):
+        # Extract features using the modified backbone
+        features = self.features(x)
+        # Classify using the custom head
+        output = self.classifier(features)
+        return output
+    
+    def set_as_feature_extractor(self):
+        """
+        Convert the model to a feature extractor by removing the classifier.
+        Used when features are needed for RNN input.
+        """
+        self.classifier = nn.Identity()
+        
+    def freeze_early_layers(self, freeze=True):
+        """
+        Freeze early layers of the ResNet backbone while keeping later layers trainable.
+        
+        Args:
+            freeze (bool): If True, freeze the early layers; if False, make them trainable.
+        """
+        # Freeze or unfreeze conv1, bn1, layer1, layer2
+        for name, param in self.backbone.named_parameters():
+            if any(x in name for x in ['conv1', 'bn1', 'layer1', 'layer2']):
+                param.requires_grad = not freeze
+                
+        print(f"Early backbone layers frozen: {freeze}")
+        
+    def freeze_late_layers(self, freeze=True):
+        """
+        Freeze late (deeper) layers of the ResNet backbone while keeping early layers trainable.
+        
+        Args:
+            freeze (bool): If True, freeze the late layers; if False, make them trainable.
+        """
+        # Freeze or unfreeze layer3, layer4
+        for name, param in self.backbone.named_parameters():
+            if any(x in name for x in ['layer3', 'layer4']):
+                param.requires_grad = not freeze
+                
+        # Also handle the classifier
+        for param in self.classifier.parameters():
+            param.requires_grad = not freeze
+                
+        print(f"Late backbone layers frozen: {freeze}")
+
 
 class CatRSDNet(nn.Module):
     def __init__(self, n_step_classes=13, max_len=20):
