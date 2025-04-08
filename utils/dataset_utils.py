@@ -187,7 +187,6 @@ class DatasetCataract1k(DatasetNoLabel):
             if problem_class in self.phases_to_frames:
                 class_frames = self.phases_to_frames[problem_class]
                 problem_frames.extend(class_frames)
-                print(f"Found {len(class_frames)} frames for problem class {problem_class}")
             else:
                 print(f"Warning: No frames found for problem class {problem_class}")
         
@@ -327,7 +326,6 @@ class DatasetCataract1k(DatasetNoLabel):
             self.img_files.extend(folder_to_valid_files[folder])
         self.img_files = sorted(self.img_files)
         self.nitems = len(self.img_files)
-        print(f"Found {self.nitems} valid image files with matching labels")
 
     def _analyze_phase_distribution(self):
         """Analyze the distribution of phases across all frames."""
