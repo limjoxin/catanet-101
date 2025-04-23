@@ -45,7 +45,8 @@ if __name__ == '__main__':
     for phase in ids_phase:
         for id in ids_phase[phase]:
             filepath = os.path.join(args.input, f'case_{id}/')
-            assert filepath in videos, f'folder {id} not found in {args.input}'
+            if not os.path.isdir(filepath):
+                raise FileNotFoundError(f"case_{id} not found under {args.input}: expected {filepath}")
             shutil.move(filepath, os.path.join(args.out, phase, f'{id}'))
 
 
