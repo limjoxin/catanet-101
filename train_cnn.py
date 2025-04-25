@@ -9,7 +9,7 @@ import sys
 import time
 import wandb
 import math
-from models.catRSDNet import CatRSDNet, EnhancedCatRSDNet
+from models.catRSDNet import EnhancedCatRSDNet
 from utils.dataset_utils import DatasetCataract1k
 from utils.logging_utils import timeSince
 import glob
@@ -316,7 +316,6 @@ def main(output_folder, log, basepath):
     config['data']['base_path'] = basepath
     config['train']['min_frames_per_phase'] = 30
     
-    config['train']['use_enhanced_model'] = True
     config['train']['gradient_accumulation_steps'] = 4
     config['train']['warmup_steps'] = 500
     config['train']['use_mixup'] = True
@@ -405,15 +404,9 @@ def main(output_folder, log, basepath):
         )
     
     # Model setup
-    if config['train']['use_enhanced_model']:
-        output_model_name = os.path.join(output_folder, 'enhanced_catRSDNet_rmsprop.pth')
-        print('Start training enhanced model with RMSprop optimizer...')
-        model = EnhancedCatRSDNet(n_classes=n_step_classes, dropout_rate=config['train']['dropout_rate'])
-    else:
-        output_model_name = os.path.join(output_folder, 'catRSDNet_rmsprop.pth')
-        print('Start training original model with RMSprop optimizer...')
-        base_model = CatRSDNet()
-        model = base_model.cnn
+    output_model_name = os.path.join(output_folder, 'enhanced_catRSDNet_rmsprop.pth')
+    print('Start training...')
+    model = EnhancedCatRSDNet(n_classes=n_step_classes, dropout_rate=config['train']['dropout_rate'])
     
     if num_devices > 1:
         model = nn.DataParallel(model).to(device)

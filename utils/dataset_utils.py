@@ -123,8 +123,9 @@ class DatasetCataract1k(DatasetNoLabel):
     Extended with support for phase-aware sampling to handle rare phases.
     """
     def __init__(self, datafolders, label_files=None, img_transform=None, max_len=20, fps=2.5,
-             min_frames_per_phase=None, balanced_sampling=False, training_mode=False, 
-             underrepresented_classes=None, problem_classes=None, problem_class_multiplier=5):
+                 min_frames_per_phase=None, balanced_sampling=False, training_mode=False,
+                 underrepresented_classes=None, problem_classes=None, problem_class_multiplier=5,
+                 return_index: bool = False):
 
         self.problem_classes = problem_classes if problem_classes is not None else []
         self.problem_class_multiplier = problem_class_multiplier
@@ -142,7 +143,8 @@ class DatasetCataract1k(DatasetNoLabel):
         self.label_files = {}
         self.label_shapes = {}
         self.patient_id_map = {}
-        
+
+        self.return_index = return_index
         super().__init__(datafolders, img_transform, max_len, fps)
         
         self.original_nitems = self.nitems
@@ -162,7 +164,6 @@ class DatasetCataract1k(DatasetNoLabel):
             self.frame_to_phase = {}
             self.phases_to_frames = {}
             # Run analysis
-            print(f"Analyzing phase distribution for balanced sampling...")
             self._analyze_phase_distribution()
             self.selected_indices = self._create_balanced_sample()
             self.nitems = len(self.selected_indices)
@@ -177,7 +178,6 @@ class DatasetCataract1k(DatasetNoLabel):
         additional indices to the selected indices list.
         """
         if not self.balanced_sampling:
-            print("Creating frame_to_phase mapping for problem class oversampling...")
             self.frame_to_phase = {}
             self.phases_to_frames = {}
             self._analyze_phase_distribution()
@@ -209,10 +209,6 @@ class DatasetCataract1k(DatasetNoLabel):
             self.selected_indices = list(range(self.nitems))
             self.selected_indices.extend(additional_frames)
             self.nitems = len(self.selected_indices)
-            
-        print(f"Aggressively oversampled problem classes {self.problem_classes}. "
-              f"Added {len(additional_frames)} frames. "
-              f"Dataset size: {original_count} -> {self.nitems}")
 
 
     def _load_labels(self, datafolders, label_files):
@@ -389,71 +385,94 @@ class DatasetCataract1k(DatasetNoLabel):
 
     def _create_balanced_sample(self):
         """
-        Create a balanced sample of frames ensuring minimum representation per phase.
-        Returns list of frame indices.
+        Create a properly balanced sample of frames with equal representation per phase.
         """
-        original_fps = 60.0
-        sample_ratio = original_fps / self.fps
-
-        regular_indices = []
-        current_index = 0
-        while current_index < self.original_nitems:
-            if current_index >= self.original_nitems:
-                break
-            regular_indices.append(current_index)
-            current_index += int(sample_ratio)
-            
-        regular_indices = [idx for idx in regular_indices if idx < self.original_nitems]
-        print(f"Created {len(regular_indices)} regular indices at FPS={self.fps}")
+        all_phases = set(self.frame_to_phase.values())
+        min_class_size = min(len(frames) for frames in self.phases_to_frames.values() if frames)
+        samples_per_class = max(100, min_class_size)
         
-        regular_phase_counts = {}
-        for idx in regular_indices:
+        balanced_indices = []
+        total_samples = 0
+        
+        # Sample equally from each class
+        for phase in sorted(all_phases):
+            if phase not in self.phases_to_frames:
+                print(f"Warning: No frames found for phase {phase}")
+                continue
+                
+            available_frames = self.phases_to_frames[phase]
+            if not available_frames:
+                print(f"Warning: Empty frame list for phase {phase}")
+                continue
+                
+            if len(available_frames) <= samples_per_class:
+                selected = available_frames.copy()
+                
+                # Then oversample with replacement if needed
+                if len(available_frames) < samples_per_class:
+                    additional = np.random.choice(
+                        available_frames, 
+                        samples_per_class - len(available_frames), 
+                        replace=True
+                    ).tolist()
+                    selected.extend(additional)
+            else:
+                # Randomly sample without replacement
+                selected = np.random.choice(
+                    available_frames, 
+                    samples_per_class, 
+                    replace=False
+                ).tolist()
+                
+            balanced_indices.extend(selected)
+            total_samples += len(selected)
+        
+        # Shuffle the balanced indices
+        np.random.shuffle(balanced_indices)
+        
+        # Final verification
+        final_phase_counts = {}
+        for idx in balanced_indices:
             if idx in self.frame_to_phase:
                 phase = self.frame_to_phase[idx]
-                if phase not in regular_phase_counts:
-                    regular_phase_counts[phase] = 0
-                regular_phase_counts[phase] += 1
+                if phase not in final_phase_counts:
+                    final_phase_counts[phase] = 0
+                final_phase_counts[phase] += 1
         
-        print("\nPhase distribution in regular sampling:")
-        for phase in sorted(regular_phase_counts.keys()):
-            print(f"  Phase {phase}: {regular_phase_counts.get(phase, 0)} frames")
-        
-        additional_indices = []
-        for phase, frames in self.phases_to_frames.items():
-            current_count = regular_phase_counts.get(phase, 0)
-            needed_count = max(0, self.min_frames_per_phase - current_count)
-            
-            if needed_count > 0:
-                available_frames = [f for f in frames if f < self.original_nitems and f not in regular_indices]
-                
-                if not available_frames:
-                    print(f"  No available frames for phase {phase}")
-                    continue
-                    
-                if len(available_frames) <= needed_count:
-                    additional_indices.extend(available_frames)
-                else:
-                    step = len(available_frames) / needed_count
-                    samples = []
-                    for i in range(needed_count):
-                        idx = int(i * step)
-                        if idx < len(available_frames):
-                            samples.append(available_frames[idx])
-                    additional_indices.extend(samples)
+        return balanced_indices
+    
+    def get_all_labels(self):
+        """
+        Return a numpy array of class‐IDs for every frame in this dataset,
+        in the same order as self.img_files.
+        """
+        labels = []
+        for img_path in self.img_files:
+            # figure out which CSV and frame index this image corresponds to
+            patientID, frame = self._name2id(img_path)
 
-        combined_indices = sorted(list(set(regular_indices + additional_indices)))
-        combined_indices = [idx for idx in combined_indices if idx < self.original_nitems]
-        
-        if not combined_indices:
-            print("WARNING: No valid indices found! Falling back to regular sampling.")
-            combined_indices = list(range(0, min(100, self.original_nitems)))
-        
-        return combined_indices
+            # map through patient_id_map if needed
+            if patientID not in self.label_files:
+                folder_name = os.path.basename(os.path.dirname(img_path))
+                patientID = self.patient_id_map.get(patientID,
+                              folder_name if folder_name in self.label_files else patientID)
 
+            arr = self.label_files.get(patientID)
+            if arr is None or arr.size == 0:
+                # fallback to class 0 if something’s missing
+                labels.append(0)
+            else:
+                # clamp frame index to valid range
+                f = min(frame, arr.shape[0] - 1)
+                labels.append(int(arr[f][0]))
+
+        return np.array(labels, dtype=int)
 
     def __getitem__(self, index):
         """Retrieves an item by index with improved error handling and class-specific transformations."""
         try:
+            actual_index = index
+            
             # Input validation
             if index < 0:
                 raise IndexError(f"Negative index {index} is invalid")
@@ -526,7 +545,10 @@ class DatasetCataract1k(DatasetNoLabel):
             
             label_tensor = torch.from_numpy(label).float()
             
-            return img, label_tensor
+            if self.return_index:
+                return img, label_tensor, actual_index
+            else:
+                return img, label_tensor
             
         except Exception as e:
             logger.error(f"Error in __getitem__ for index {index}: {str(e)}")
@@ -535,7 +557,11 @@ class DatasetCataract1k(DatasetNoLabel):
                 logger.error(f"  - Balanced sampling: mapped index {index} to actual_index {actual_index}")
                 logger.error(f"  - Total images: {len(self.img_files)}, Total selected indices: {len(self.selected_indices)}")
             
-            return torch.zeros((4, 224, 224)), torch.zeros(4).float()
+            if self.return_index:
+                return torch.zeros((4,224,224)), torch.zeros(4).float(), index
+            else:
+                return torch.zeros((4,224,224)), torch.zeros(4).float()
+            
             
     def __len__(self):
         """Return the number of items in the dataset."""

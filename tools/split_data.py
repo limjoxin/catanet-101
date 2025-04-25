@@ -243,15 +243,6 @@ def balanced_frame_based_split(videos, stats, val_ratio=0.2, test_ratio=0.1, min
     train_test_overlap = train_set.intersection(test_set)
     val_test_overlap = val_set.intersection(test_set)
     
-    if train_val_overlap or train_test_overlap or val_test_overlap:
-        print("WARNING: Found overlapping video assignments between splits!")
-        if train_val_overlap:
-            print(f"  Train-Val overlap: {len(train_val_overlap)} videos")
-        if train_test_overlap:
-            print(f"  Train-Test overlap: {len(train_test_overlap)} videos")
-        if val_test_overlap:
-            print(f"  Val-Test overlap: {len(val_test_overlap)} videos")
-    
     # Verify no video is missed
     all_assigned = set(train_videos + val_videos + test_videos)
     if len(all_assigned) != len(videos):
@@ -313,16 +304,16 @@ def analyze_split_distribution(train_videos, val_videos, test_videos, stats):
     total_in_splits = sum(s['frames'] for s in split_stats.values())
     
     # For each phase, calculate percent in each split
-    print("\n===== PHASE REPRESENTATION ACROSS SPLITS =====")
+    # print("\n===== PHASE REPRESENTATION ACROSS SPLITS =====")
     for phase in sorted(all_phases):
-        print(f"Phase {phase}:")
+        # print(f"Phase {phase}:")
         total_phase_frames = sum(split_stats[split]['phase_counts'].get(phase, 0) for split in splits)
         
         if total_phase_frames > 0:
             for split_name in splits:
                 phase_count = split_stats[split_name]['phase_counts'].get(phase, 0)
                 split_percent = (phase_count / total_phase_frames) * 100
-                print(f"  {split_name}: {phase_count} frames ({split_percent:.2f}% of phase {phase} frames)")
+                # print(f"  {split_name}: {phase_count} frames ({split_percent:.2f}% of phase {phase} frames)")
     
     # Print class distribution in a tabular format for easy comparison
     print("\n===== CLASS DISTRIBUTION SUMMARY TABLE =====")
@@ -452,11 +443,38 @@ def main():
         seed=args.seed
     )
     
-    print(f"\nSplit complete: {len(train_videos)} training, {len(val_videos)} validation, "
-          f"{len(test_videos)} test videos")
+    # print(f"\nInitial split complete: {len(train_videos)} training, {len(val_videos)} validation, "
+    #       f"{len(test_videos)} test videos")
     
     # Analyze the phase distribution in each split
-    # analyze_split_distribution(train_videos, val_videos, test_videos, stats)
+    missing_in_val, missing_in_test = analyze_split_distribution(train_videos, val_videos, test_videos, stats)
+    
+    # Apply augmentation if requested to ensure all phases are in all splits
+    if args.augment:
+        train_videos, val_videos, test_videos = ensure_all_phases_in_splits(
+            train_videos, 
+            val_videos, 
+            test_videos, 
+            stats, 
+            args.out,
+            min_examples=args.min_synthetic
+        )
+        
+        # print(f"\nAfter augmentation: {len(train_videos)} training, {len(val_videos)} validation, "
+        #       f"{len(test_videos)} test videos")
+        
+        # # Re-analyze the distribution after augmentation
+        # print("\n===== DISTRIBUTION AFTER AUGMENTATION =====")
+        # missing_in_val, missing_in_test = analyze_split_distribution(train_videos, val_videos, test_videos, stats)
+        
+        # if not missing_in_val and not missing_in_test:
+        #     print("\nSuccess! All phases are now represented in all splits.")
+        # else:
+        #     print("\nWarning: Some phases still missing after augmentation.")
+        #     if missing_in_val:
+        #         print(f"Validation still missing phases: {missing_in_val}")
+        #     if missing_in_test:
+        #         print(f"Test still missing phases: {missing_in_test}")
     
     moved_success = 0
     
