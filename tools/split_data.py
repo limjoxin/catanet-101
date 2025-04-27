@@ -304,16 +304,16 @@ def analyze_split_distribution(train_videos, val_videos, test_videos, stats):
     total_in_splits = sum(s['frames'] for s in split_stats.values())
     
     # For each phase, calculate percent in each split
-    # print("\n===== PHASE REPRESENTATION ACROSS SPLITS =====")
+    print("\n===== PHASE REPRESENTATION ACROSS SPLITS =====")
     for phase in sorted(all_phases):
-        # print(f"Phase {phase}:")
+        print(f"Phase {phase}:")
         total_phase_frames = sum(split_stats[split]['phase_counts'].get(phase, 0) for split in splits)
         
         if total_phase_frames > 0:
             for split_name in splits:
                 phase_count = split_stats[split_name]['phase_counts'].get(phase, 0)
                 split_percent = (phase_count / total_phase_frames) * 100
-                # print(f"  {split_name}: {phase_count} frames ({split_percent:.2f}% of phase {phase} frames)")
+                print(f"  {split_name}: {phase_count} frames ({split_percent:.2f}% of phase {phase} frames)")
     
     # Print class distribution in a tabular format for easy comparison
     print("\n===== CLASS DISTRIBUTION SUMMARY TABLE =====")
@@ -427,7 +427,7 @@ def main():
     
     # # Analyze the dataset
     stats = analyze_dataset(video_dirs)
-    # print_dataset_stats(stats)
+    print_dataset_stats(stats)
     
     # Create output directories if they don't exist
     for phase in ['train', 'val', 'test']:
@@ -443,25 +443,25 @@ def main():
         seed=args.seed
     )
     
-    # print(f"\nInitial split complete: {len(train_videos)} training, {len(val_videos)} validation, "
-    #       f"{len(test_videos)} test videos")
+    print(f"\nInitial split complete: {len(train_videos)} training, {len(val_videos)} validation, "
+          f"{len(test_videos)} test videos")
     
     # Analyze the phase distribution in each split
     missing_in_val, missing_in_test = analyze_split_distribution(train_videos, val_videos, test_videos, stats)
     
     # Apply augmentation if requested to ensure all phases are in all splits
-    if args.augment:
-        train_videos, val_videos, test_videos = ensure_all_phases_in_splits(
-            train_videos, 
-            val_videos, 
-            test_videos, 
-            stats, 
-            args.out,
-            min_examples=args.min_synthetic
-        )
+    # if args.augment:
+    #     train_videos, val_videos, test_videos = ensure_all_phases_in_splits(
+    #         train_videos, 
+    #         val_videos, 
+    #         test_videos, 
+    #         stats, 
+    #         args.out,
+    #         min_examples=args.min_synthetic
+    #     )
         
-        # print(f"\nAfter augmentation: {len(train_videos)} training, {len(val_videos)} validation, "
-        #       f"{len(test_videos)} test videos")
+    #     print(f"\nAfter augmentation: {len(train_videos)} training, {len(val_videos)} validation, "
+    #           f"{len(test_videos)} test videos")
         
         # # Re-analyze the distribution after augmentation
         # print("\n===== DISTRIBUTION AFTER AUGMENTATION =====")

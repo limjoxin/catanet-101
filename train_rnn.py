@@ -27,35 +27,65 @@ import random
 import warnings
 import numpy as np
 from numpy._core.multiarray import scalar as numpy_scalar
-from models.catRSDNet import CatRSDNet
 import logging
 
 float32_dtype = np.dtype('float32').__class__
 torch.serialization.add_safe_globals([float32_dtype])
 logging.getLogger("wandb").setLevel(logging.WARNING)
 
+import torch
+import torch.nn.functional as F
+from torch import nn
 
-class FocalLoss(nn.Module):
+
+class MultiClassFocalLoss(nn.Module):
     """
-    Focal Loss implementation for handling class imbalance more effectively.
-    Applies a modulating factor to the standard cross-entropy loss.
+    Multi-class Focal Loss.
+    FL = αₜ (1 – pₜ)^γ ⋅ (−log pₜ)
+
+    Args:
+        alpha: 1D Tensor of shape [num_classes], giving weight αᵢ for each class.
+               If None, all αᵢ = 1.
+        gamma: focusing parameter γ ≥ 0.
+        reduction: 'none' | 'mean' | 'sum'
     """
-    def __init__(self, weight=None, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.weight = weight
+    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+        super().__init__()
+        if alpha is not None:
+            # ensure it's a float tensor
+            self.alpha = alpha.float()
+        else:
+            self.alpha = None
         self.gamma = gamma
         self.reduction = reduction
 
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor):
         """
-        inputs: [batch, n_classes] logits
-        targets: [batch] long
+        inputs: [batch, C] logits (raw scores)
+        targets: [batch] long with class indices in [0..C-1]
         """
-        ce = F.cross_entropy(inputs, targets, weight=None, reduction='none')
-        pt = torch.exp(-ce)  # p_t
-        at = self.alpha[targets]  # pick alpha for each true class
-        loss = at * (1 - pt)**self.gamma * ce
-        return loss.mean() if self.reduction=='mean' else loss.sum()
+        # Compute per-sample cross-entropy: ce = –log pₜ
+        ce_loss = F.cross_entropy(inputs, targets, weight=None, reduction='none')
+        # Compute pₜ = exp(–ce)
+        pt = torch.exp(-ce_loss)
+
+        # α factor for each target
+        if self.alpha is not None:
+            # gather αᵢ for each sample’s true class
+            alpha_t = self.alpha.to(inputs.device)[targets]
+        else:
+            alpha_t = 1.0
+
+        # Focal loss
+        loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+
 
 
 def conf2metrics(conf_mat):
@@ -184,7 +214,7 @@ def main(output_folder, log, pretrained_model):
     best_loss_global = float("inf")              # lowest val‑loss seen so far
     
     n_step_classes = 13
-    model = CatRSDNet()
+    model = CombinedEnhancedModel()
 
     # Load pretrained CNN if available
     if pretrained_model and os.path.exists(pretrained_model):
@@ -222,6 +252,23 @@ def main(output_folder, log, pretrained_model):
                                         transforms.ToTensor(),
                                         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet normalization
                                         ])
+    img_transform_train = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.RandomResizedCrop(config['input_size'], scale=(0.8, 1.0)),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225]),
+    ])
+    img_transform_val = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize(config['input_size']),
+        transforms.CenterCrop(config['input_size']),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                            std=[0.229, 0.224, 0.225]),
+    ])
     
     sequences_path = {key:{} for key in training_phases}
     sequences_path['train']['label'] = sorted(glob.glob(os.path.join(config['data']['base_path'], 'train','**','*.csv')))
@@ -548,7 +595,9 @@ def main(output_folder, log, pretrained_model):
                             idxs = torch.arange(X.size(0))
                         X      = X.float().to(device)
                         y_step = y[:, 0].long().to(device)
-                        y_rsd  = (y[:, 1] / (60.0 * 25.0)).float().to(device)
+                        # y_rsd  = (y[:, 1] / (60.0 * 25.0)).float().to(device)
+                        y_rsd_raw = (y[:, 1] / (60.0 * 25.0)).float().to(device)
+                        y_rsd     = torch.log1p(y_rsd_raw)
 
                         with torch.set_grad_enabled(phase == 'train'):
                             with autocast("cuda", enabled=(scaler is not None)):
@@ -573,7 +622,8 @@ def main(output_folder, log, pretrained_model):
 
                                 # Compute losses
                                 loss_step = step_criterion(step_pred, y_step)
-                                loss_rsd = rsd_criterion(rsd_pred, y_rsd)
+                                # loss_rsd = rsd_criterion(rsd_pred, y_rsd)
+                                loss_rsd  = nn.L1Loss()(rsd_pred, y_rsd)
                                 loss = loss_step + 0.2 * loss_rsd
 
                             # Backprop + optimizer step
