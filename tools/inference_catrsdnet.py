@@ -80,8 +80,13 @@ def main(out, input_dir, checkpoint, labels):
 
             with torch.no_grad():
                 step_pred, rsd_pred = model(X, elapsed_time, stateful=(ii > 0))
+                # rsd_pred = rsd_pred.squeeze(-1)
+                if rsd_pred.dim()==2: rsd_pred = rsd_pred[:,-1]
+                # rsd_minutes = torch.expm1(rsd_pred)
                 step_hard = torch.argmax(step_pred, dim=-1).cpu().numpy()
                 rsd_np = rsd_pred.view(-1).cpu().numpy()
+                # rsd_np = rsd_minutes.cpu().numpy()
+
                 elapsed_np = elapsed_time.view(-1).cpu().numpy()
                 progress = elapsed_np / (elapsed_np + rsd_np + 1e-5)
 

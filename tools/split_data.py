@@ -358,6 +358,19 @@ def analyze_split_distribution(train_videos, val_videos, test_videos, stats):
         row.append(f"{total_phase_frames}")
         
         print(" | ".join(row))
+    
+    missing_in_val = [
+        phase
+        for phase in all_phases
+        if split_stats['val']['phase_counts'].get(phase, 0) == 0
+    ]
+    missing_in_test = [
+        phase
+        for phase in all_phases
+        if split_stats['test']['phase_counts'].get(phase, 0) == 0
+    ]
+
+    return missing_in_val, missing_in_test
 
 
 def main():
