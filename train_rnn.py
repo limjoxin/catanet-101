@@ -36,6 +36,7 @@ logging.getLogger("wandb").setLevel(logging.WARNING)
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 class MultiClassFocalLoss(nn.Module):
@@ -64,19 +65,14 @@ class MultiClassFocalLoss(nn.Module):
         inputs: [batch, C] logits (raw scores)
         targets: [batch] long with class indices in [0..C-1]
         """
-        # Compute per-sample cross-entropy: ce = –log pₜ
         ce_loss = F.cross_entropy(inputs, targets, weight=None, reduction='none')
-        # Compute pₜ = exp(–ce)
         pt = torch.exp(-ce_loss)
 
-        # α factor for each target
         if self.alpha is not None:
-            # gather αᵢ for each sample’s true class
             alpha_t = self.alpha.to(inputs.device)[targets]
         else:
             alpha_t = 1.0
 
-        # Focal loss
         loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
 
         if self.reduction == 'mean':
@@ -183,7 +179,7 @@ def main(output_folder, log, pretrained_model):
     config = {'train': {}, 'val': {}, 'data': {}}
     config["train"]['batch_size'] = 64
     config["train"]['epochs'] = [5, 10]
-    config["train"]["learning_rate"] = [0.003, 0.0001]
+    config["train"]["learning_rate"] = [0.003, 0.001]
     config['train']['weighted_loss'] = True
     config['train']['use_focal_loss'] = True  # New option for focal loss
     config['train']['focal_gamma'] = 1.0
@@ -197,7 +193,9 @@ def main(output_folder, log, pretrained_model):
     config['train']['window'] = 32
     config['input_size'] = 224
     config['val']['test_every'] = 1
-    config['train']['weight_decay'] = 1e-4  # Weight decay for regularization
+    config['train']['weight_decay'] = 1e-4
+    config['train']['grad_accum_steps'] = 1
+    config['train']['clip_value'] = 1.
 
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
@@ -391,10 +389,14 @@ def main(output_folder, log, pretrained_model):
                         for i, batch in enumerate(dataloader):
                             X = batch[0]
                             with torch.no_grad():
-                                batch_size_actual = X.shape[0]
-                                batch_features = model.cnn(X.float().to(device)).cpu().numpy()
-                                features[input_path][current_idx:current_idx + batch_size_actual] = batch_features
-                                current_idx += batch_size_actual
+                                # extract [B, C, 1, 1] → flatten to [B, C]
+                                feat = model.cnn(X.float().to(device))
+                                feat = torch.flatten(feat, start_dim=1)
+                                batch_features = feat.cpu().numpy()
+                            bs = batch_features.shape[0]
+                            features[input_path][current_idx:current_idx + bs] = batch_features
+                            current_idx += bs
+
                     
                         # Verify expected number of frames
                         assert current_idx == total_frames, f"{current_idx} / {total_frames} frames processed"
@@ -461,10 +463,6 @@ def main(output_folder, log, pretrained_model):
                     ]
         else:
             raise RuntimeError(f'Training step {training_step} not implemented')
-    
-        # Set initial_lr
-        for param_group in trainable_params:
-            param_group['initial_lr'] = param_group['lr']
         
         # Create optimizer with weight decay for regularization
         optim = torch.optim.AdamW(
@@ -496,6 +494,16 @@ def main(output_folder, log, pretrained_model):
                 total_batches += batches
 
             updates_per_epoch = total_batches // config['train']['grad_accum_steps']
+            updates_per_epoch = total_batches // config['train']['grad_accum_steps']
+            if total_batches == 0:
+                raise RuntimeError(
+                    f"No training batches found! "
+                    f"total_batches={total_batches}, "
+                    f"grad_accum_steps={config['train']['grad_accum_steps']}. "
+                    "Check that your dataset paths and window sizes are correct."
+                )
+            # ensure at least one step
+            updates_per_epoch = max(1, updates_per_epoch)
 
             scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 optim,
